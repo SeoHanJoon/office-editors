@@ -1,6 +1,15 @@
 import type { History } from "@office/command-core";
 import type { CellAddress, CellRange } from "./address";
 import { CellEditor } from "./cell-editor";
+import {
+  copyText,
+  fitsSheet,
+  moveChanges,
+  parseClipboardText,
+  pasteArea,
+  pasteCopyChanges,
+  pasteTextChanges,
+} from "./clipboard";
 import { editAction, type EditMode } from "./edit-keys";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
@@ -31,6 +40,19 @@ export interface GridViewOptions {
 
 type SelectionListener = (selection: Selection) => void;
 
+/** 이 화면에서 복사하거나 잘라낸 범위. 클립보드에 넣은 글자와 함께 기억한다. */
+interface Copied {
+  readonly range: CellRange;
+  readonly text: string;
+  readonly cut: boolean;
+}
+
+/** 클립보드를 거치며 줄바꿈 모양이나 끝 줄바꿈이 바뀌어도 같은 글자로 본다. */
+function sameClipboardText(a: string, b: string): boolean {
+  const normalize = (text: string) => text.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  return normalize(a) === normalize(b);
+}
+
 /**
  * 시트를 container 안에 Canvas로 그리고, 마우스·키보드로 셀을 고르고 값을 입력하게 한다. React 없이 동작한다.
  *
@@ -40,6 +62,9 @@ type SelectionListener = (selection: Selection) => void;
  *
  * 셀 값은 모두 SetCellsCommand로 history에 넣어 바꾼다. undo/redo로 값이 바뀌면 그 셀들을 선택한다.
  * 셀에는 engine의 계산값을 그리고(계산 중인 칸은 회색 "…"), 입력창에는 입력한 글자(수식)를 그대로 보여준다.
+ *
+ * 복사/잘라내기/붙여넣기는 입력창의 copy·cut·paste 이벤트로 받는다. 클립보드에는 Excel과 같은 text/plain(보이는 값)을 넣고,
+ * 복사한 범위를 기억해 두었다가 붙여넣을 글자가 그때 넣은 글자와 같으면 수식째 붙인다. (Excel과 같은 방식)
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -60,6 +85,8 @@ export class GridView {
   private dragPointer: number | null = null;
   /** 이 화면이 직접 편집을 실행하는 중인지. 그동안 온 시트 변경은 선택을 옮기지 않는다. */
   private applying = false;
+  /** 복사하거나 잘라낸 범위. 다른 편집을 하거나 Esc를 누르면 지운다. */
+  private copied: Copied | null = null;
 
   constructor(
     container: HTMLElement,
@@ -106,6 +133,9 @@ export class GridView {
     input.addEventListener("beforeinput", this.onBeforeInput);
     input.addEventListener("input", this.onInput);
     input.addEventListener("compositionstart", this.onCompositionStart);
+    input.addEventListener("copy", this.onCopy);
+    input.addEventListener("cut", this.onCut);
+    input.addEventListener("paste", this.onPaste);
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
     // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
     this.unsubscribeEngine = engine.onChange(this.requestRender);
@@ -180,8 +210,17 @@ export class GridView {
     this.scroller.scrollTop = next.scrollTop;
   }
 
-  /** 편집 한 번을 실행하고 기록한다. */
-  private apply(changes: readonly CellChange[]): void {
+  /** 복사한 범위가 있으면 그 범위("A1:B3"), 없으면 null */
+  get copiedRange(): CellRange | null {
+    return this.copied?.range ?? null;
+  }
+
+  /**
+   * 편집 한 번을 실행하고 기록한다.
+   * 복사한 범위 표시는 지운다. (Excel처럼 다른 편집을 하면 복사 상태가 풀린다) 복사한 것을 붙여넣을 때만 keepCopied로 남긴다.
+   */
+  private apply(changes: readonly CellChange[], keepCopied = false): void {
+    if (!keepCopied) this.clearCopied();
     if (changes.length === 0) return;
     this.applying = true;
     try {
@@ -232,10 +271,74 @@ export class GridView {
     this.apply(changes);
   }
 
+  private clearCopied(): void {
+    if (!this.copied) return;
+    this.copied = null;
+    this.requestRender();
+  }
+
+  /** 입력 중이 아니면 선택 범위의 보이는 값을 클립보드에 넣고 범위를 기억한다. 입력 중이면 입력창 글자 복사(브라우저 기본) */
+  private copy(event: ClipboardEvent, cut: boolean): void {
+    if (this.editor.mode || !event.clipboardData) return;
+    event.preventDefault();
+    const range = selectionRange(this.currentSelection);
+    const text = copyText(this.sheet, this.engine, range);
+    event.clipboardData.setData("text/plain", text);
+    this.copied = { range, text, cut };
+    this.requestRender();
+  }
+
+  private readonly onCopy = (event: ClipboardEvent): void => this.copy(event, false);
+
+  private readonly onCut = (event: ClipboardEvent): void => this.copy(event, true);
+
+  /** 입력 중이 아니면 선택한 곳에 붙여넣는다. 입력 중이면 입력창에 글자로 붙인다. (브라우저 기본) */
+  private readonly onPaste = (event: ClipboardEvent): void => {
+    if (this.editor.mode || !event.clipboardData) return;
+    event.preventDefault();
+    this.paste(event.clipboardData.getData("text/plain"));
+  };
+
+  /**
+   * 클립보드 글자를 선택한 곳에 붙여넣고, 붙인 범위를 선택한다. 붙일 범위가 시트 밖으로 넘치면 아무것도 하지 않는다. (Excel은 알림을 띄운다)
+   * - 이 화면에서 복사한 글자면: 수식째 붙이고 상대 참조를 옮긴다. 복사 표시는 남아서 여러 번 붙일 수 있다.
+   * - 이 화면에서 잘라낸 글자면: 셀을 옮기고 그 셀을 가리키던 참조를 고친다. 한 번만 붙일 수 있다.
+   * - 아니면(다른 프로그램, 새로고침 전 복사): 칸마다 글자를 입력한 것처럼 넣는다. `=`로 시작하면 수식이다.
+   */
+  private paste(text: string): void {
+    const selected = selectionRange(this.currentSelection);
+    const copied = this.copied && sameClipboardText(text, this.copied.text) ? this.copied : null;
+    let target: CellRange;
+    if (copied?.cut) {
+      const { range } = copied;
+      target = {
+        top: selected.top,
+        left: selected.left,
+        bottom: selected.top + range.bottom - range.top,
+        right: selected.left + range.right - range.left,
+      };
+      if (!fitsSheet(this.sheet, target)) return;
+      this.apply(moveChanges(this.sheet, range, target.top, target.left));
+    } else if (copied) {
+      const { range } = copied;
+      target = pasteArea(selected, range.bottom - range.top + 1, range.right - range.left + 1);
+      if (!fitsSheet(this.sheet, target)) return;
+      this.apply(pasteCopyChanges(this.sheet, range, target), true);
+    } else {
+      if (text === "") return;
+      const values = parseClipboardText(text);
+      target = pasteArea(selected, values.length, values[0]!.length);
+      if (!fitsSheet(this.sheet, target)) return;
+      this.apply(pasteTextChanges(values, target));
+    }
+    this.select(selectRange(target), "active");
+  }
+
   /** undo/redo 등 이 화면 밖에서 값이 바뀌면 바뀐 셀들을 선택한다. (Excel과 같음) */
   private readonly onSheetChange = (addresses: readonly CellAddress[]): void => {
     this.requestRender();
     if (this.applying || addresses.length === 0) return;
+    this.clearCopied();
     let { row: top, col: left } = addresses[0]!;
     let bottom = top;
     let right = left;
@@ -288,7 +391,8 @@ export class GridView {
         return;
       case "cancel":
         event.preventDefault();
-        this.editor.stop();
+        if (this.editor.mode) this.editor.stop();
+        else this.clearCopied();
         this.requestRender();
         return;
       case "block":
@@ -311,7 +415,7 @@ export class GridView {
     this.select(result.selection, extendsRange ? "focus" : "active");
   }
 
-  /** 입력 중이 아닐 때는 글자 입력만 받는다. (줄바꿈, 붙여넣기, 지우기 등은 막는다. 붙여넣기는 Step 6) */
+  /** 입력 중이 아닐 때는 글자 입력만 받는다. (줄바꿈, 지우기 등은 막는다. 붙여넣기는 paste 이벤트에서 따로 처리한다) */
   private readonly onBeforeInput = (event: InputEvent): void => {
     if (this.editor.mode) return;
     if (event.inputType !== "insertText" && event.inputType !== "insertCompositionText") event.preventDefault();
@@ -401,6 +505,13 @@ export class GridView {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    drawGrid(ctx, { sheet: this.sheet, engine: this.engine, selection: this.currentSelection, layout: this.layout, viewport });
+    drawGrid(ctx, {
+      sheet: this.sheet,
+      engine: this.engine,
+      selection: this.currentSelection,
+      copied: this.copied?.range ?? null,
+      layout: this.layout,
+      viewport,
+    });
   }
 }

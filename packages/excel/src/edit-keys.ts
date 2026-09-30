@@ -24,6 +24,7 @@ export type EditAction =
   /** 기존 값으로 "edit" 입력을 시작한다. (F2) */
   | "edit"
   | "commit"
+  /** 입력을 취소한다. 입력 중이 아니면 복사한 범위 표시(점선)를 지운다. (Esc) */
   | "cancel"
   /** 입력 중에 "enter"와 "edit"를 바꾼다. (F2) */
   | "toggleMode"
@@ -46,6 +47,7 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
     if (plain && input.key === "Delete") return "clear";
     if (plain && input.key === "Backspace") return "clearAndEnter";
     if (plain && input.key === "F2") return "edit";
+    if (plain && input.key === "Escape") return "cancel";
     return "navigate";
   }
 

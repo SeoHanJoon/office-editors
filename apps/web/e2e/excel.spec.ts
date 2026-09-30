@@ -453,3 +453,101 @@ test.describe("수식", () => {
     expect(await value(page, "L2")).toBe("6");
   });
 });
+
+test.describe("복사/붙여넣기", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
+  const readClipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+  const writeClipboard = (page: Page, text: string) => page.evaluate((text) => navigator.clipboard.writeText(text), text);
+
+  test("범위를 복사하면 클립보드에 Excel처럼 탭과 줄바꿈으로 나눈 보이는 값이 들어가고 점선이 그려진다", async ({ page }) => {
+    await clickCell(page, "E1");
+    await clickCell(page, "G3", { shift: true });
+    await page.keyboard.press("ControlOrMeta+c");
+
+    const shown = await page.evaluate(() =>
+      ["E", "F", "G"].map((column) => [1, 2, 3].map((row) => window.__excel!.value(`${column}${row}`))),
+    );
+    const rows = [0, 1, 2].map((row) => shown.map((column) => column[row]).join("\t"));
+    // G열은 수식(=SUM)이지만 클립보드에는 계산값이 들어간다.
+    expect(await readClipboard(page)).toBe(rows.map((row) => `${row}\r\n`).join(""));
+    expect((await state(page)).copied).toBe("E1:G3");
+
+    // Esc를 누르면 점선이 사라진다.
+    await page.keyboard.press("Escape");
+    expect((await state(page)).copied).toBeNull();
+  });
+
+  test("수식을 복사해 붙여넣으면 상대 참조가 옮긴 만큼 따라가고, 여러 번 붙일 수 있다", async ({ page }) => {
+    await clickCell(page, "G2"); // =SUM(D2:F2)
+    await page.keyboard.press("ControlOrMeta+c");
+
+    await clickCell(page, "L3");
+    await page.keyboard.press("ControlOrMeta+v");
+    expect(await cell(page, "L3")).toBe("=SUM(I3:K3)");
+
+    // 범위를 고르고 붙이면 범위 전체에 채운다. 점선은 남아 있다.
+    await clickCell(page, "G5");
+    await clickCell(page, "G7", { shift: true });
+    await page.keyboard.press("ControlOrMeta+v");
+    expect(await cell(page, "G6")).toBe("=SUM(D6:F6)");
+    expect((await state(page)).copied).toBe("G2");
+    expect((await state(page)).selection).toBe("G5:G7");
+  });
+
+  test("Excel에서 복사한 글자를 붙여넣으면 칸마다 들어가고, 한 번에 되돌린다", async ({ page }) => {
+    // Excel이 클립보드에 넣는 모양: 탭·CRLF, 셀 안 줄바꿈은 큰따옴표로 감쌈, 마지막 줄 뒤에도 CRLF
+    await writeClipboard(page, '10\t20\t=L2+M2\r\n"여러\n줄"\t\t한글\r\n');
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+v");
+
+    expect(await Promise.all(["L2", "M2", "N2", "L3", "M3", "N3"].map((a1) => cell(page, a1)))).toEqual([
+      "10",
+      "20",
+      "=L2+M2",
+      "여러\n줄",
+      "",
+      "한글",
+    ]);
+    expect(await value(page, "N2")).toBe("30");
+    expect((await state(page)).selection).toBe("L2:N3");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await Promise.all(["L2", "N2", "L3", "N3"].map((a1) => cell(page, a1)))).toEqual(["", "", "", ""]);
+  });
+
+  test("잘라내 붙여넣으면 셀이 옮겨지고, 옮긴 셀을 가리키던 수식이 따라간다", async ({ page }) => {
+    const scores = await Promise.all(["D2", "E2", "F2"].map((a1) => cell(page, a1)));
+    const total = await value(page, "G2");
+
+    await clickCell(page, "D2");
+    await clickCell(page, "F2", { shift: true });
+    await page.keyboard.press("ControlOrMeta+x");
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+v");
+
+    expect(await Promise.all(["L2", "M2", "N2"].map((a1) => cell(page, a1)))).toEqual(scores);
+    expect(await cell(page, "D2")).toBe("");
+    expect(await cell(page, "G2")).toBe("=SUM(L2:N2)");
+    expect(await value(page, "G2")).toBe(total);
+    // 잘라낸 것은 한 번만 붙인다.
+    expect((await state(page)).copied).toBeNull();
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cell(page, "D2")).toBe(scores[0]);
+    expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
+  });
+
+  test("입력 중에는 입력창 안에서 글자를 붙여넣는다", async ({ page }) => {
+    await writeClipboard(page, "붙인 글자");
+    await clickCell(page, "L2");
+    await page.keyboard.press("F2");
+    await page.keyboard.press("ControlOrMeta+v");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "L2")).toBe("붙인 글자");
+    expect(await cell(page, "M2")).toBe("");
+  });
+});

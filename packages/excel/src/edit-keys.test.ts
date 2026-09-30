@@ -45,6 +45,7 @@ describe("입력 중이 아닐 때", () => {
     expect(action("Delete", null)).toBe("clear");
     expect(action("Backspace", null)).toBe("clearAndEnter");
     expect(action("F2", null)).toBe("edit");
+    expect(action("Escape", null)).toBe("cancel");
   });
 
   test("나머지 키는 이동 키인지 navigate에 묻는다", () => {
