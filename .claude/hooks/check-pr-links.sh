@@ -16,7 +16,8 @@ if [[ -n "$file" && "$file" != "-" ]]; then
 fi
 
 # ](...) 안이 http(s)://, #, mailto:로 시작하지 않으면 상대 링크다.
-links=$(grep -oE '\]\([^)[:space:]]+\)' <<<"$body" | grep -vE '^\]\((https?://|#|mailto:)' | sort -u)
+# $로 시작하면 셸 변수라 실행할 때 전체 주소로 바뀌므로 넘긴다. (--body-file 파일은 실제 내용으로 검사된다)
+links=$(grep -oE '\]\([^)[:space:]]+\)' <<<"$body" | grep -vE '^\]\((https?://|#|mailto:|\$)' | sort -u)
 [[ -z "$links" ]] && exit 0
 
 {
