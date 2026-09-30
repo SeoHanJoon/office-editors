@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { FormulaSyntaxError, parseFormula, type Expr } from "./formula-parser";
+import { FormulaSyntaxError, findFormulaProblem, parseFormula, type Expr } from "./formula-parser";
 
 /** 구문 나무를 괄호로 묶은 글자로 바꿔 우선순위를 한눈에 보게 한다. */
 function show(expr: Expr): string {
@@ -157,5 +157,18 @@ describe("문법 오류", () => {
 
   test("범위 : 뒤에 셀 주소가 없으면 오류다", () => {
     expect(syntaxError("=A1:1").message).toContain("범위");
+  });
+});
+
+describe("셀 입력 검사", () => {
+  test("수식이 아닌 입력과 문법이 맞는 수식은 문제가 없다", () => {
+    expect(findFormulaProblem("")).toBeNull();
+    expect(findFormulaProblem("1+")).toBeNull();
+    expect(findFormulaProblem("=SUM(A1:A3)")).toBeNull();
+  });
+
+  test("문법이 틀린 수식이면 오류와 위치를 돌려준다", () => {
+    expect(findFormulaProblem("=1+")).toMatchObject({ position: 3 });
+    expect(findFormulaProblem("=SUM()")).toBeInstanceOf(FormulaSyntaxError);
   });
 });

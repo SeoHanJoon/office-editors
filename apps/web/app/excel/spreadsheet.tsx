@@ -26,6 +26,8 @@ export interface ExcelTestHandle {
     visible: string;
     /** 셀 입력 중이면 "enter"(글자를 쳐서 시작) 또는 "edit"(F2·더블클릭으로 시작), 아니면 null */
     editing: EditMode | null;
+    /** 틀린 수식이라 확정하지 못했다는 알림이 떠 있으면 그 글자, 아니면 null */
+    problem: string | null;
   };
   /** 셀("B3")에 입력된 글자. 수식이면 "=A1+1"처럼 수식 그대로. 빈 셀이면 "" */
   cell(a1: string): string;
@@ -62,6 +64,7 @@ export function Spreadsheet() {
           selection: rangeToA1(selectionRange(view.selection)),
           visible: rangeToA1(view.visibleRange),
           editing: view.editMode,
+          problem: view.problem,
         }),
         cell: (a1) => sheet.get(address(a1)),
         value: (a1) => formatValue(engine.getValue(address(a1))),

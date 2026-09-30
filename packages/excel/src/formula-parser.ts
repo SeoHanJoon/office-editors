@@ -61,6 +61,18 @@ export function parseFormula(input: string): Expr {
   return new Parser(tokenize(input)).parse();
 }
 
+/** 셀 입력이 문법이 틀린 수식이면 그 오류, 아니면(수식이 아니거나 문법이 맞으면) null */
+export function findFormulaProblem(input: string): FormulaSyntaxError | null {
+  if (!input.startsWith("=")) return null;
+  try {
+    parseFormula(input);
+    return null;
+  } catch (error) {
+    if (error instanceof FormulaSyntaxError) return error;
+    throw error;
+  }
+}
+
 const OPERATORS = ["<>", "<=", ">=", "+", "-", "*", "/", "^", "&", "=", "<", ">", "%", "(", ")", ",", ":"];
 const REF = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_.(])/;
 const NAME = /^[\p{L}_\\][\p{L}\p{N}_.]*/u;

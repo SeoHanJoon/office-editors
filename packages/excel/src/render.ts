@@ -33,6 +33,9 @@ export const THEME = {
   headerSelectedText: "#0e5c2f",
   selectionBorder: "#107c41",
   selectionFill: "rgba(16, 124, 65, 0.12)",
+  problemText: "#a4262c",
+  problemBackground: "#fff8f8",
+  problemBorder: "#e0b4b4",
 };
 
 /**
