@@ -61,6 +61,34 @@ describe("입력 중이 아닐 때", () => {
     expect(action("Control+-", "edit", "Minus")).toBeNull();
   });
 
+  test("Ctrl/Cmd+A는 시트 전체 선택이다. 한글 자판에서 'ㅁ'로 와도 같다", () => {
+    expect(action("Control+a", null)).toBe("selectAll");
+    expect(action("Meta+a", null)).toBe("selectAll");
+    expect(action("Control+ㅁ", null, "KeyA")).toBe("selectAll");
+    // 입력 중에는 입력창 글자 전체 선택
+    expect(action("Control+a", "edit")).toBeNull();
+  });
+
+  test("Shift+Space는 행 선택, Ctrl+Space와 ⌥Space는 열 선택이다", () => {
+    const space = (combo: string, key = " ") => action(`${combo}+${key}`, null, "Space");
+    expect(space("Shift")).toBe("selectRows");
+    expect(space("Control")).toBe("selectColumns");
+    // Mac의 ⌥Space는 key가 줄바꿈 없는 공백으로 온다.
+    expect(space("Alt", "\u00a0")).toBe("selectColumns");
+    // Cmd+Space(Spotlight)와 다른 조합은 받지 않는다.
+    for (const combo of ["Meta", "Shift+Control", "Control+Alt", "Shift+Alt"]) expect(space(combo)).toBe("navigate");
+    // 입력 중에는 공백 입력
+    expect(action("Shift+ ", "enter", "Space")).toBeNull();
+  });
+
+  test("Shift+F10과 메뉴 키는 오른쪽 클릭 메뉴를 연다", () => {
+    expect(action("Shift+F10", null)).toBe("openMenu");
+    expect(action("ContextMenu", null)).toBe("openMenu");
+    expect(action("F10", null)).toBe("navigate");
+    // 입력 중에는 브라우저에 맡긴다.
+    expect(action("Shift+F10", "edit")).toBeNull();
+  });
+
   test("나머지 키는 이동 키인지 navigate에 묻는다", () => {
     for (const combo of ["ArrowDown", "Enter", "Tab", "a", "ㅎ", "Control+c", "Alt+z"]) {
       expect(action(combo, null)).toBe("navigate");

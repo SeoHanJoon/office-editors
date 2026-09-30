@@ -45,6 +45,32 @@ export function selectColumns(from: number, to: number, bounds: SheetBounds): Se
   return { anchor, focus: { row: bounds.rowCount - 1, col: to }, active: anchor };
 }
 
+/** 시트 전체를 고른다. 활성 셀은 그대로 둔다. (Ctrl/Cmd+A, 왼쪽 위 모서리 클릭. Excel과 같음) */
+export function selectAll(selection: Selection, bounds: SheetBounds): Selection {
+  return {
+    anchor: { row: 0, col: 0 },
+    focus: { row: bounds.rowCount - 1, col: bounds.colCount - 1 },
+    active: selection.active,
+  };
+}
+
+/**
+ * 고른 범위가 걸친 행 전체("row") 또는 열 전체("col")로 넓힌다. 활성 셀은 그대로 둔다.
+ * (Shift+Space는 행, Ctrl+Space는 열. Excel과 같음)
+ * anchor·focus의 방향을 지켜서 이어서 Shift+방향키를 누르면 같은 쪽 끝이 움직인다.
+ */
+export function expandToLines(selection: Selection, axis: "row" | "col", bounds: SheetBounds): Selection {
+  const { anchor, focus, active } = selection;
+  if (axis === "row") {
+    const forward = anchor.col <= focus.col;
+    const [anchorCol, focusCol] = forward ? [0, bounds.colCount - 1] : [bounds.colCount - 1, 0];
+    return { anchor: { row: anchor.row, col: anchorCol }, focus: { row: focus.row, col: focusCol }, active };
+  }
+  const forward = anchor.row <= focus.row;
+  const [anchorRow, focusRow] = forward ? [0, bounds.rowCount - 1] : [bounds.rowCount - 1, 0];
+  return { anchor: { row: anchorRow, col: anchor.col }, focus: { row: focusRow, col: focus.col }, active };
+}
+
 /**
  * 범위가 행 전체("row")인지 열 전체("col")인지. 둘 다 아니면 null
  * 시트 전체면 행 전체로 본다.
@@ -53,6 +79,21 @@ export function wholeLines(range: CellRange, bounds: SheetBounds): "row" | "col"
   if (range.left === 0 && range.right === bounds.colCount - 1) return "row";
   if (range.top === 0 && range.bottom === bounds.rowCount - 1) return "col";
   return null;
+}
+
+/**
+ * Shift로 범위를 늘릴 때 화면에 보이게 할 셀. 보통은 focus다.
+ * 행 전체를 고른 채 늘리면 가로로는 활성 셀 열에 두고, 열 전체면 세로로는 활성 셀 행에 둔다.
+ * (focus가 끝 열·끝 행이라 그대로 보이게 하면 화면이 시트 끝으로 튄다)
+ */
+export function focusToReveal(selection: Selection, bounds: SheetBounds): CellAddress {
+  const range = selectionRange(selection);
+  const allCols = range.left === 0 && range.right === bounds.colCount - 1;
+  const allRows = range.top === 0 && range.bottom === bounds.rowCount - 1;
+  return {
+    row: allRows ? selection.active.row : selection.focus.row,
+    col: allCols ? selection.active.col : selection.focus.col,
+  };
 }
 
 /** 선택의 세 주소를 시트 안으로 잘라 넣는다. (행·열을 지워 시트가 줄었을 때) */

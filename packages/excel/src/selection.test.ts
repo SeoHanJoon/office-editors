@@ -3,9 +3,12 @@ import { parseA1, toA1 } from "./address";
 import {
   clampSelection,
   cycleInRange,
+  expandToLines,
   extendTo,
+  focusToReveal,
   moveBy,
   moveToDataEdge,
+  selectAll,
   selectCell,
   selectColumns,
   selectRange,
@@ -43,6 +46,50 @@ describe("행·열 전체 선택", () => {
   test("시트가 줄면 선택을 시트 안으로 잘라 넣는다", () => {
     const selection = clampSelection(selectRows(95, 99, bounds), { rowCount: 96, colCount: 10 });
     expect(selectionRange(selection)).toEqual({ top: 95, left: 0, bottom: 95, right: 9 });
+  });
+});
+
+describe("전체 선택과 줄 선택", () => {
+  const bounds = { rowCount: 100, colCount: 10 };
+  const range = (from: string, to: string, active = from): Selection => ({ anchor: at(from), focus: at(to), active: at(active) });
+
+  test("시트 전체를 고르고 활성 셀은 그대로 둔다", () => {
+    const selection = selectAll(selectCell(at("C5")), bounds);
+    expect(selectionRange(selection)).toEqual({ top: 0, left: 0, bottom: 99, right: 9 });
+    expect(toA1(selection.active)).toBe("C5");
+  });
+
+  test("걸친 행 전체로 넓히고 활성 셀은 그대로 둔다", () => {
+    const selection = expandToLines(range("B3", "D5", "C4"), "row", bounds);
+    expect(selectionRange(selection)).toEqual({ top: 2, left: 0, bottom: 4, right: 9 });
+    expect(toA1(selection.active)).toBe("C4");
+    expect(wholeLines(selectionRange(selection), bounds)).toBe("row");
+  });
+
+  test("걸친 열 전체로 넓히고 활성 셀은 그대로 둔다", () => {
+    const selection = expandToLines(range("B3", "D5"), "col", bounds);
+    expect(selectionRange(selection)).toEqual({ top: 0, left: 1, bottom: 99, right: 3 });
+    expect(toA1(selection.active)).toBe("B3");
+    expect(wholeLines(selectionRange(selection), bounds)).toBe("col");
+  });
+
+  test("넓힌 뒤에도 focus 쪽 끝이 그대로라 Shift+방향키로 이어서 늘린다", () => {
+    // 아래에서 위로 고른 범위: focus가 위쪽
+    const rows = expandToLines(range("B5", "B3"), "row", bounds);
+    expect(rows.focus.row).toBe(2);
+    expect(selectionRange(extendTo(rows, moveBy(rows.focus, "up", bounds)))).toEqual({ top: 1, left: 0, bottom: 4, right: 9 });
+    const cols = expandToLines(range("D2", "B2"), "col", bounds);
+    expect(cols.focus.col).toBe(1);
+    expect(selectionRange(extendTo(cols, moveBy(cols.focus, "left", bounds)))).toEqual({ top: 0, left: 0, bottom: 99, right: 3 });
+  });
+
+  test("줄 전체를 늘릴 때는 그 줄 방향으로 시트 끝까지 스크롤하지 않는다", () => {
+    const rows = expandToLines(range("B3", "B4"), "row", bounds);
+    expect(toA1(focusToReveal(rows, bounds))).toBe("B4");
+    const cols = expandToLines(range("C3", "D3"), "col", bounds);
+    expect(toA1(focusToReveal(cols, bounds))).toBe("D3");
+    expect(toA1(focusToReveal(selectAll(selectCell(at("E7")), bounds), bounds))).toBe("E7");
+    expect(toA1(focusToReveal(range("B3", "D5"), bounds))).toBe("D5");
   });
 });
 

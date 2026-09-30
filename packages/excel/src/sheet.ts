@@ -1,7 +1,7 @@
 import { MAX_COLS, MAX_ROWS, cellKey, keyToAddress, toA1, type CellAddress } from "./address";
 import { rewriteFormula, structureMapping } from "./formula-references";
 import { isFormula } from "./formula-value";
-import { mapLine, type StructureChange } from "./structure";
+import { canChangeStructure, mapLine, type StructureChange } from "./structure";
 
 /** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
 const STRIDE = MAX_COLS;
@@ -136,17 +136,13 @@ export class Sheet {
    * 넣을 자리·지울 줄이 시트 밖이거나, 시트가 최대 크기를 넘거나 비게 되거나, cells가 새 크기 밖이면 아무것도 바꾸지 않고 RangeError를 던진다.
    */
   changeStructure(change: StructureChange, cells: readonly CellChange[] = []): StructureResult {
-    const byRow = change.axis === "row";
-    const size = byRow ? this.rows : this.cols;
-    const max = byRow ? MAX_ROWS : MAX_COLS;
-    const { index, count } = change;
-    const newSize = change.kind === "insert" ? size + count : size - count;
-    if (!Number.isInteger(index) || !Number.isInteger(count) || count < 1 || index < 0) {
-      throw new RangeError(`잘못된 행·열 변경이다: ${JSON.stringify(change)}`);
-    }
-    if (change.kind === "insert" ? index > size || newSize > max : index + count > size || newSize < 1) {
+    if (!canChangeStructure(change, this)) {
       throw new RangeError(`시트(${this.rows}행 × ${this.cols}열)에서 할 수 없는 행·열 변경이다: ${JSON.stringify(change)}`);
     }
+    const byRow = change.axis === "row";
+    const size = byRow ? this.rows : this.cols;
+    const { index, count } = change;
+    const newSize = change.kind === "insert" ? size + count : size - count;
     const rows = byRow ? newSize : this.rows;
     const cols = byRow ? this.cols : newSize;
     for (const { address } of cells) {

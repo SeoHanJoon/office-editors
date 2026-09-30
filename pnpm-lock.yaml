@@ -90,6 +90,9 @@ importers:
       '@office/command-core':
         specifier: workspace:*
         version: link:../command-core
+      '@office/ui':
+        specifier: workspace:*
+        version: link:../ui
     devDependencies:
       hyperformula:
         specifier: ^3.4.0

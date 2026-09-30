@@ -14,6 +14,18 @@ export interface StructureChange {
   readonly count: number;
 }
 
+/**
+ * 이 크기의 시트에서 change를 할 수 있는지.
+ * 시트 밖을 가리키거나, 최대 크기(1,048,576행 × 16,384열)를 넘거나, 시트가 비게 되면 할 수 없다.
+ */
+export function canChangeStructure(change: StructureChange, bounds: { rowCount: number; colCount: number }): boolean {
+  const { index, count } = change;
+  if (!Number.isInteger(index) || !Number.isInteger(count) || count < 1 || index < 0) return false;
+  const size = change.axis === "row" ? bounds.rowCount : bounds.colCount;
+  const max = change.axis === "row" ? MAX_ROWS : MAX_COLS;
+  return change.kind === "insert" ? index <= size && size + count <= max : index + count <= size && size - count >= 1;
+}
+
 /** change를 되돌리는 변경. (삽입 ↔ 삭제) */
 export function inverseChange(change: StructureChange): StructureChange {
   return { ...change, kind: change.kind === "insert" ? "delete" : "insert" };
