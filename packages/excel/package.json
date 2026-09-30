@@ -12,7 +12,8 @@
     "bench": "vitest bench --run --reporter=verbose --no-file-parallelism"
   },
   "dependencies": {
-    "@office/command-core": "workspace:*"
+    "@office/command-core": "workspace:*",
+    "@office/ui": "workspace:*"
   },
   "devDependencies": {
     "hyperformula": "^3.4.0",
