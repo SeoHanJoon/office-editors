@@ -73,7 +73,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | **2** ✅ | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 (범위 선택, 빠른 이동 키 포함) | 1,000행 표가 화면에 보이고 선택이 됨 | [0008](adr/0008-cell-storage.md), [0009](adr/0009-grid-view.md), [0010](adr/0010-e2e-grid-state.md), [0011](adr/0011-split-cell-input-step.md), [0012](adr/0012-selection-model.md) |
 | **3** ✅ | Excel | 셀 값 입력 (셀 위 DOM 입력창, 한글 입력) + 공통 undo 연결 | 셀에 값(한글 포함)을 입력하고 undo/redo가 동작함 | [0013](adr/0013-selection-active-cell.md), [0014](adr/0014-cell-editor-ime.md), [0015](adr/0015-set-cells-command.md), [0016](adr/0016-shared-history.md) |
 | **4** ✅ | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | [0017](adr/0017-formula-engine.md), [0018](adr/0018-dependency-graph-and-cycles.md), [0019](adr/0019-reject-invalid-formula.md), [0020](adr/0020-grid-view-engine.md) |
-| **5** ✅ | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | [0021](adr/0021-range-index-interval-tree.md), [0022](adr/0022-performance-measurement.md), [0023](adr/0023-large-sample-sheet.md) |
+| **5** ✅ | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | [0021](adr/0021-range-index-interval-tree.md), [0022](adr/0022-performance-measurement.md), [0023](adr/0023-large-sample-sheet.md), [0024](adr/0024-background-first-calculation.md) |
 | **6** | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | 예정 |
 | **7** | Docs | Tiptap으로 기본 문서 편집 + 공통 undo 연결 | 글쓰기·서식·undo 동작 | 예정 |
 | **8** | PPT | 슬라이드 추가/삭제, 텍스트·도형 배치 + 공통 undo 연결 | 슬라이드 3장 편집 가능 | 예정 |
@@ -85,9 +85,10 @@ ADR은 아래 형식으로 짧게 씁니다.
 
 | 상황 | 목표 | 측정값 |
 |---|---|---|
-| 10만 행 × 50열 스크롤 | 끊김 없이(60fps) | 60fps, 밀린 프레임 0 (세로 천천히·빠르게, 가로 모두), 그리기 최대 0.0035초 |
-| 연결된 셀 1만 개 다시 계산 | 0.05초 이내 | 0.0072초 |
-| 큰 `SUM` 수식이 있는 시트에서 셀 하나 수정 | 0.016초 이내 | 0.0045초 (`=SUM(A1:A100000)`) |
+| 10만 행 × 50열 스크롤 | 끊김 없이(60fps) | 60fps, 밀린 프레임 0 (세로 천천히·빠르게, 가로 모두), 그리기 최대 0.0033초 |
+| 연결된 셀 1만 개 다시 계산 | 0.05초 이내 | 0.0082초 |
+| 큰 `SUM` 수식이 있는 시트에서 셀 하나 수정 | 0.016초 이내 | 0.0044초 (`=SUM(A1:A100000)`) |
+| 10만 행 시트(수식 20만 개) 첫 화면 — 셀까지 그려짐 | 0.5초 이내 | 0.23~0.38초 (수식 계산 완료 1.4~1.8초, 그동안 "…" 표시) |
 
 > 2026-09-30, Apple M1 Mac, `pnpm bench` 기준. 스크롤은 개발 서버의 Chromium(1280×720)에서 쟀다. 측정 방법은 [ADR 0022](adr/0022-performance-measurement.md) 참고.
 
