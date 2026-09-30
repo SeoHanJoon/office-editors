@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+
+# 의존성
+node_modules/
+
+# 빌드 결과
+dist/
+.next/
+.turbo/
+
+# 테스트 결과
+coverage/
+test-results/
+playwright-report/
+recordings/
+
+# 환경 변수
+.env
+.env.*
+!.env.example
+
+# Claude Code 개인 설정
+.claude/settings.local.json
