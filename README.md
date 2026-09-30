@@ -71,7 +71,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | **0** ✅ | 공통 | 모노레포 뼈대 만들기 (pnpm, Turborepo, TypeScript, Vitest, Playwright 녹화 설정) + `apps/web` 빈 페이지 1개와 그 페이지를 여는 브라우저 테스트 1개 | `pnpm test`, `pnpm typecheck`, `pnpm e2e`가 통과하고, `pnpm e2e:record`로 `recordings/`에 영상이 생김 | [0001](adr/0001-monorepo-tooling.md), [0002](adr/0002-internal-packages-as-source.md), [0003](adr/0003-test-setup.md), [0004](adr/0004-pr-recordings-in-ci.md) (폐기), [0005](adr/0005-pr-recordings-gh-attach.md), [0006](adr/0006-pr-as-is-to-be-videos.md) |
 | **1** ✅ | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | [0007](adr/0007-command-history.md) |
 | **2** ✅ | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 (범위 선택, 빠른 이동 키 포함) | 1,000행 표가 화면에 보이고 선택이 됨 | [0008](adr/0008-cell-storage.md), [0009](adr/0009-grid-view.md), [0010](adr/0010-e2e-grid-state.md), [0011](adr/0011-split-cell-input-step.md), [0012](adr/0012-selection-model.md) |
-| **3** | Excel | 셀 값 입력 (셀 위 DOM 입력창, 한글 입력) + 공통 undo 연결 | 셀에 값(한글 포함)을 입력하고 undo/redo가 동작함 | 예정 |
+| **3** ✅ | Excel | 셀 값 입력 (셀 위 DOM 입력창, 한글 입력) + 공통 undo 연결 | 셀에 값(한글 포함)을 입력하고 undo/redo가 동작함 | [0013](adr/0013-selection-active-cell.md), [0014](adr/0014-cell-editor-ime.md), [0015](adr/0015-set-cells-command.md), [0016](adr/0016-shared-history.md) |
 | **4** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
 | **5** | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | 예정 |
 | **6** | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | 예정 |

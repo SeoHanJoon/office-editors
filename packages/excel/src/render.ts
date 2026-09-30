@@ -10,12 +10,18 @@ export interface RenderState {
   readonly viewport: Viewport;
 }
 
+/** 셀 글자 글꼴. 셀 입력창도 같은 글꼴을 쓴다. */
+export const CELL_FONT = '13px -apple-system, "Segoe UI", "Malgun Gothic", sans-serif';
+
+/** 셀 안쪽 글자 여백 (px) */
+export const CELL_PADDING = 4;
+
 /** Excel과 비슷한 색 */
-const THEME = {
+export const THEME = {
   background: "#ffffff",
   gridLine: "#e1e1e1",
   text: "#000000",
-  font: '13px -apple-system, "Segoe UI", "Malgun Gothic", sans-serif',
+  font: CELL_FONT,
   headerBackground: "#f5f5f5",
   headerSelectedBackground: "#d3f0e0",
   headerLine: "#c8c8c8",
@@ -24,9 +30,6 @@ const THEME = {
   selectionBorder: "#107c41",
   selectionFill: "rgba(16, 124, 65, 0.12)",
 };
-
-/** 셀 안쪽 글자 여백 (px) */
-const PADDING = 4;
 
 /**
  * 화면에 보이는 칸만 그린다. 좌표는 CSS px 기준이다.
@@ -65,7 +68,7 @@ function drawSelectionFill(ctx: CanvasRenderingContext2D, { layout, viewport, se
   const area = rangeRect(layout, viewport, range);
   ctx.fillStyle = THEME.selectionFill;
   ctx.fillRect(area.x, area.y, area.width, area.height);
-  const active = cellRect(layout, viewport, selection.anchor);
+  const active = cellRect(layout, viewport, selection.active);
   ctx.fillStyle = THEME.background;
   ctx.fillRect(active.x, active.y, active.width, active.height);
 }
@@ -110,7 +113,7 @@ function drawCellText(ctx: CanvasRenderingContext2D, { sheet, layout, viewport }
       ctx.rect(rect.x, rect.y, rect.width, rect.height);
       ctx.clip();
       ctx.textAlign = right ? "right" : "left";
-      ctx.fillText(input, right ? rect.x + rect.width - PADDING : rect.x + PADDING, rect.y + rect.height / 2);
+      ctx.fillText(input, right ? rect.x + rect.width - CELL_PADDING : rect.x + CELL_PADDING, rect.y + rect.height / 2);
       ctx.restore();
     }
   }

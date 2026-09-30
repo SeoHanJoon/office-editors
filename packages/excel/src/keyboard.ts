@@ -1,7 +1,9 @@
 import type { CellAddress } from "./address";
 import {
   clampAddress,
+  cycleInRange,
   extendTo,
+  isSingleCell,
   moveBy,
   moveToDataEdge,
   selectCell,
@@ -13,6 +15,8 @@ import type { Sheet } from "./sheet";
 /** 키보드 이벤트에서 이동에 필요한 부분. (KeyboardEvent를 그대로 넘겨도 된다) */
 export interface KeyInput {
   readonly key: string;
+  /** 자판 위치 ("KeyZ"). 자판 배열과 상관없이 같다. */
+  readonly code?: string;
   readonly shiftKey: boolean;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;
@@ -36,7 +40,7 @@ export interface NavigateResult {
  * Ctrl 대신 Cmd(macOS)를 눌러도 같다. Shift를 함께 누르면 활성 셀은 두고 범위를 늘린다.
  *
  * - 방향키: 한 칸 / Ctrl+방향키: 데이터 끝
- * - Tab, Shift+Tab: 오른쪽, 왼쪽 / Enter, Shift+Enter: 아래, 위 (범위는 풀린다)
+ * - Tab, Shift+Tab: 오른쪽, 왼쪽 / Enter, Shift+Enter: 아래, 위. 범위를 고른 채 누르면 범위는 두고 그 안에서 활성 셀을 옮긴다.
  * - Home: 그 행의 A열 / Ctrl+Home: A1
  * - PageDown, PageUp: 한 화면만큼 아래, 위
  */
@@ -49,7 +53,7 @@ export function navigate(
   const mod = input.ctrlKey || input.metaKey;
   const { shiftKey } = input;
   // Shift로 범위를 늘릴 때는 반대쪽 끝을, 아니면 활성 셀을 기준으로 옮긴다.
-  const from = shiftKey ? selection.focus : selection.anchor;
+  const from = shiftKey ? selection.focus : selection.active;
   const result = (to: CellAddress, scrollRows = 0): NavigateResult => ({
     selection: shiftKey ? extendTo(selection, to) : selectCell(to),
     scrollRows,
@@ -66,8 +70,9 @@ export function navigate(
       if (mod) return null;
       const forward = input.key === "Tab" ? "right" : "down";
       const backward = input.key === "Tab" ? "left" : "up";
-      const to = moveBy(selection.anchor, shiftKey ? backward : forward, sheet);
-      return { selection: selectCell(to), scrollRows: 0 };
+      const direction = shiftKey ? backward : forward;
+      if (!isSingleCell(selection)) return { selection: cycleInRange(selection, direction), scrollRows: 0 };
+      return { selection: selectCell(moveBy(selection.active, direction, sheet)), scrollRows: 0 };
     }
     case "Home":
       return result(mod ? { row: 0, col: 0 } : { row: from.row, col: 0 });

@@ -1,4 +1,4 @@
-import { MAX_COLS, MAX_ROWS, type CellAddress } from "./address";
+import { MAX_COLS, MAX_ROWS, toA1, type CellAddress } from "./address";
 
 export interface SheetOptions {
   /** 행 수. 1 이상 MAX_ROWS 이하 */
@@ -9,6 +9,15 @@ export interface SheetOptions {
   data?: readonly (readonly string[])[];
 }
 
+/** 셀 하나에 넣을 값. 빈 문자열이면 셀을 비운다. */
+export interface CellChange {
+  readonly address: CellAddress;
+  readonly value: string;
+}
+
+/** 값이 바뀐 셀 주소를 받는다. setCells에 넘긴 순서 그대로다. */
+export type SheetChangeListener = (addresses: readonly CellAddress[]) => void;
+
 /**
  * 시트 한 장의 셀 값. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
  * 값이 있는 셀만 Map에 넣으므로 빈 셀은 메모리를 쓰지 않는다.
@@ -18,6 +27,7 @@ export class Sheet {
   readonly colCount: number;
   /** 키는 cellKey(주소). 값은 빈 문자열이 아니다. */
   private readonly cells = new Map<number, string>();
+  private readonly listeners = new Set<SheetChangeListener>();
 
   constructor({ rowCount, colCount, data = [] }: SheetOptions) {
     assertCount("rowCount", rowCount, MAX_ROWS);
@@ -47,6 +57,36 @@ export class Sheet {
   /** 셀에 값이 있는지 */
   has(address: CellAddress): boolean {
     return this.cells.has(cellKey(address));
+  }
+
+  /**
+   * 여러 셀의 값을 한 번에 바꾸고 변경을 한 번 알린다.
+   * 편집은 SetCellsCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
+   * 시트 밖 주소가 하나라도 있으면 아무것도 바꾸지 않고 RangeError를 던진다.
+   */
+  setCells(changes: readonly CellChange[]): void {
+    for (const { address } of changes) {
+      if (!this.contains(address)) {
+        throw new RangeError(`시트(${this.rowCount}행 × ${this.colCount}열) 밖의 셀이다: ${toA1(address)}`);
+      }
+    }
+    for (const { address, value } of changes) {
+      if (value === "") this.cells.delete(cellKey(address));
+      else this.cells.set(cellKey(address), value);
+    }
+    if (changes.length === 0) return;
+    const addresses = changes.map((change) => change.address);
+    for (const listener of this.listeners) listener(addresses);
+  }
+
+  /** 값이 바뀔 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
+  onChange(listener: SheetChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private contains({ row, col }: CellAddress): boolean {
+    return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0 && row < this.rowCount && col < this.colCount;
   }
 }
 

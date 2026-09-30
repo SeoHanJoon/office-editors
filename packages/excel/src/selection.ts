@@ -2,12 +2,14 @@ import type { CellAddress, CellRange } from "./address";
 import type { Sheet } from "./sheet";
 
 /**
- * 선택 상태. anchor는 활성 셀(이름 상자에 보이는 셀)이고, focus는 Shift나 드래그로 늘린 반대쪽 끝이다.
- * 셀 하나만 선택하면 anchor와 focus가 같다.
+ * 선택 상태. 범위는 anchor(범위를 늘리기 시작한 셀)와 focus(Shift나 드래그로 늘린 반대쪽 끝)가 만드는 사각형이다.
+ * active는 활성 셀(이름 상자에 보이고 값을 입력받는 셀)로, 늘 범위 안에 있다.
+ * 보통 active는 anchor와 같고, 범위 안에서 Enter/Tab을 누를 때만 범위 안을 돈다.
  */
 export interface Selection {
   readonly anchor: CellAddress;
   readonly focus: CellAddress;
+  readonly active: CellAddress;
 }
 
 export type Direction = "up" | "down" | "left" | "right";
@@ -17,12 +19,18 @@ export type SheetBounds = Pick<Sheet, "rowCount" | "colCount">;
 
 /** 셀 하나만 선택한다. */
 export function selectCell(address: CellAddress): Selection {
-  return { anchor: address, focus: address };
+  return { anchor: address, focus: address, active: address };
 }
 
-/** 활성 셀은 그대로 두고 반대쪽 끝을 옮겨 범위를 늘리거나 줄인다. */
+/** anchor는 그대로 두고 반대쪽 끝을 옮겨 범위를 늘리거나 줄인다. 활성 셀은 anchor로 돌아간다. */
 export function extendTo(selection: Selection, focus: CellAddress): Selection {
-  return { anchor: selection.anchor, focus };
+  return { anchor: selection.anchor, focus, active: selection.anchor };
+}
+
+/** 범위를 선택하고 활성 셀을 왼쪽 위 칸에 둔다. */
+export function selectRange(range: CellRange): Selection {
+  const topLeft = { row: range.top, col: range.left };
+  return { anchor: topLeft, focus: { row: range.bottom, col: range.right }, active: topLeft };
 }
 
 /** 선택이 덮는 사각형 범위 */
@@ -36,7 +44,7 @@ export function selectionRange({ anchor, focus }: Selection): CellRange {
 }
 
 export function sameSelection(a: Selection, b: Selection): boolean {
-  return sameAddress(a.anchor, b.anchor) && sameAddress(a.focus, b.focus);
+  return sameAddress(a.anchor, b.anchor) && sameAddress(a.focus, b.focus) && sameAddress(a.active, b.active);
 }
 
 export function sameAddress(a: CellAddress, b: CellAddress): boolean {
@@ -96,6 +104,34 @@ export function moveToDataEdge(
     current = ahead;
   }
   return current;
+}
+
+/**
+ * 범위 안에서 활성 셀을 한 칸 옮긴다. 범위는 그대로 둔다. (범위를 고른 채 Enter/Tab을 누를 때, Excel과 같음)
+ * - "down"(Enter): 아래로, 열 끝이면 다음 열 맨 위로 / "up"(Shift+Enter): 그 반대
+ * - "right"(Tab): 오른쪽으로, 행 끝이면 다음 행 맨 왼쪽으로 / "left"(Shift+Tab): 그 반대
+ * 범위의 마지막 칸 다음은 첫 칸이다.
+ */
+export function cycleInRange(selection: Selection, direction: Direction): Selection {
+  const { top, left, bottom, right } = selectionRange(selection);
+  const rows = bottom - top + 1;
+  const cols = right - left + 1;
+  const { row, col } = selection.active;
+  // 범위 칸에 차례 번호를 붙이고 한 칸 앞뒤로 옮긴다. Enter는 열 먼저, Tab은 행 먼저 센다.
+  const byColumn = direction === "up" || direction === "down";
+  const step = direction === "down" || direction === "right" ? 1 : -1;
+  const total = rows * cols;
+  const index = byColumn ? (col - left) * rows + (row - top) : (row - top) * cols + (col - left);
+  const next = (index + step + total) % total;
+  const active = byColumn
+    ? { row: top + (next % rows), col: left + Math.floor(next / rows) }
+    : { row: top + Math.floor(next / cols), col: left + (next % cols) };
+  return { ...selection, active };
+}
+
+/** 선택이 셀 하나뿐인지 */
+export function isSingleCell({ anchor, focus }: Selection): boolean {
+  return sameAddress(anchor, focus);
 }
 
 const DELTA: Record<Direction, readonly [number, number]> = {

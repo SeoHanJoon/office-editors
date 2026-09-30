@@ -1,6 +1,7 @@
 "use client";
 
-import { GridView, rangeToA1, selectionRange, toA1 } from "@office/excel";
+import { History } from "@office/command-core";
+import { GridView, parseA1, rangeToA1, selectionRange, toA1, type EditMode } from "@office/excel";
 import { useEffect, useRef, useState } from "react";
 import { createSampleSheet } from "./sample-data";
 
@@ -13,7 +14,11 @@ export interface ExcelTestHandle {
     selection: string;
     /** 화면에 보이는 범위 ("A1:T40") */
     visible: string;
+    /** 셀 입력 중이면 "enter"(글자를 쳐서 시작) 또는 "edit"(F2·더블클릭으로 시작), 아니면 null */
+    editing: EditMode | null;
   };
+  /** 셀("B3")에 입력된 글자. 빈 셀이면 "" */
+  cell(a1: string): string;
 }
 
 declare global {
@@ -27,16 +32,23 @@ export function Spreadsheet() {
   const [active, setActive] = useState("A1");
 
   useEffect(() => {
-    const view = new GridView(gridRef.current!, createSampleSheet());
-    const unsubscribe = view.onSelectionChange((selection) => setActive(toA1(selection.anchor)));
+    const sheet = createSampleSheet();
+    const view = new GridView(gridRef.current!, sheet, new History());
+    const unsubscribe = view.onSelectionChange((selection) => setActive(toA1(selection.active)));
     view.focus();
     if (process.env.NODE_ENV !== "production") {
       window.__excel = {
         state: () => ({
-          active: toA1(view.selection.anchor),
+          active: toA1(view.selection.active),
           selection: rangeToA1(selectionRange(view.selection)),
           visible: rangeToA1(view.visibleRange),
+          editing: view.editMode,
         }),
+        cell: (a1) => {
+          const address = parseA1(a1);
+          if (!address) throw new Error(`셀 주소가 아니다: ${a1}`);
+          return sheet.get(address);
+        },
       };
     }
     return () => {
