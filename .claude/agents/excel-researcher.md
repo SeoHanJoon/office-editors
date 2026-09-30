@@ -1,6 +1,6 @@
 ---
 name: excel-researcher
-description: Microsoft Excel의 실제 동작(함수 인자, 빈 셀·텍스트·논리값 처리, 에러 값, 복사/붙여넣기 클립보드 형식, 행·열 삽입 시 참조 변화)을 공식 문서에서 조사해 정리한다. /excel-function 1단계나 Step 3·5에서 Excel 동작 기준이 필요할 때 사용한다. 코드는 읽기만 한다.
+description: Microsoft Excel의 실제 동작(함수 인자, 빈 셀·텍스트·논리값 처리, 에러 값, 복사/붙여넣기 클립보드 형식, 행·열 삽입 시 참조 변화)을 공식 문서에서 조사해 정리한다. /excel-function 1단계나 Step 4·6에서 Excel 동작 기준이 필요할 때 사용한다. 코드는 읽기만 한다.
 tools: WebSearch, WebFetch, Read, Grep, Glob
 model: sonnet
 ---

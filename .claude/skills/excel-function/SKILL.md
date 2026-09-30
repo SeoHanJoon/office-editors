@@ -1,6 +1,6 @@
 ---
 name: excel-function
-description: Excel 수식 함수(SUM, IF, VLOOKUP 등)를 수식 엔진에 추가한다. Excel과 같은 동작을 확인하고, 단위 테스트와 HyperFormula 정답 비교 테스트를 함께 작성한다. Step 3 이후 함수를 새로 구현하거나 동작을 고칠 때 사용한다.
+description: Excel 수식 함수(SUM, IF, VLOOKUP 등)를 수식 엔진에 추가한다. Excel과 같은 동작을 확인하고, 단위 테스트와 HyperFormula 정답 비교 테스트를 함께 작성한다. Step 4 이후 함수를 새로 구현하거나 동작을 고칠 때 사용한다.
 argument-hint: "<함수 이름...>"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "<함수 이름...>"
 
 ## 0. 먼저 확인
 
-- 수식 엔진 구조는 Step 3의 ADR(`adr/`)을 따른다. 기존 함수 1~2개의 구현과 테스트를 읽고 같은 방식으로 만든다.
+- 수식 엔진 구조는 Step 4의 ADR(`adr/`)을 따른다. 기존 함수 1~2개의 구현과 테스트를 읽고 같은 방식으로 만든다.
 - 수식 엔진이 아직 없으면 멈추고 사용자에게 알린다.
 
 ## 1. Excel 동작 정리 (구현 전에)
