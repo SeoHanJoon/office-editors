@@ -177,5 +177,5 @@ describe("행·열을 넣고 지운 뒤 수식 글자가 HyperFormula와 같다"
 
   // 비교에서 뺀 것
   // - 거꾸로 쓴 범위(`A5:A2`): HyperFormula는 읽을 때 `A2:A5`로 바꿔 둔다. (Excel도 입력할 때 바꾼다) 여기서는 입력한 글자를 그대로 두므로 비교하지 않는다.
-  // - 잘라내 붙여넣어 덮어쓴 자리를 가리키던 참조: HyperFormula(moveCells)는 주소를 그대로 두고, 여기서는 #REF!로 둔다. Excel 확인이 필요하다. (ADR 참고)
+  // - 잘라내 붙여넣어 덮어쓴 자리를 가리키던 참조: Excel은 #REF!(실제 Excel로 확인), HyperFormula(moveCells)는 주소를 그대로 둔다. (ADR 0025)
 });
