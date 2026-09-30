@@ -6,6 +6,7 @@ import {
   isInHeader,
   pageRows,
   pointToCell,
+  pointToHeader,
   scrollToReveal,
   visibleRange,
   type GridLayout,
@@ -86,6 +87,23 @@ describe("좌표로 셀 찾기", () => {
     expect(isInHeader(layout, 29, 50)).toBe(true);
     expect(isInHeader(layout, 50, 9)).toBe(true);
     expect(isInHeader(layout, 30, 10)).toBe(false);
+  });
+});
+
+describe("좌표로 머리글 찾기", () => {
+  test("행 번호를 누르면 그 행, 열 이름을 누르면 그 열이다", () => {
+    expect(pointToHeader(layout, viewport(), bounds, 10, 35)).toEqual({ axis: "row", index: 2 });
+    expect(pointToHeader(layout, viewport(), bounds, 75, 5)).toEqual({ axis: "col", index: 2 });
+  });
+
+  test("스크롤한 만큼 옮겨서 찾는다", () => {
+    expect(pointToHeader(layout, viewport(40, 100), bounds, 10, 15)).toEqual({ axis: "row", index: 10 });
+    expect(pointToHeader(layout, viewport(40, 100), bounds, 35, 5)).toEqual({ axis: "col", index: 2 });
+  });
+
+  test("셀 위와 왼쪽 위 모서리는 머리글이 아니다", () => {
+    expect(pointToHeader(layout, viewport(), bounds, 50, 20)).toBeNull();
+    expect(pointToHeader(layout, viewport(), bounds, 5, 5)).toBeNull();
   });
 });
 

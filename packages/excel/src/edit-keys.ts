@@ -28,6 +28,10 @@ export type EditAction =
   | "cancel"
   /** 입력 중에 "enter"와 "edit"를 바꾼다. (F2) */
   | "toggleMode"
+  /** 고른 행·열 전체 앞에 같은 수만큼 새 행·열을 넣는다. (Ctrl+Shift+=, Ctrl+숫자패드 +) */
+  | "insertLines"
+  /** 고른 행·열 전체를 지운다. (Ctrl+-) */
+  | "deleteLines"
   | "block";
 
 /**
@@ -43,6 +47,9 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
     if (mod && !input.altKey) {
       if (isLetter(input, "z")) return input.shiftKey ? "redo" : "undo";
       if (isLetter(input, "y") && !input.shiftKey) return "redo";
+      // 자판마다 Shift+=의 key가 다를 수 있어서 자판 위치(code)도 본다.
+      if (input.key === "+" || (input.shiftKey && input.code === "Equal") || input.code === "NumpadAdd") return "insertLines";
+      if (!input.shiftKey && (input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract")) return "deleteLines";
     }
     if (plain && input.key === "Delete") return "clear";
     if (plain && input.key === "Backspace") return "clearAndEnter";

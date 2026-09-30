@@ -33,6 +33,33 @@ export function selectRange(range: CellRange): Selection {
   return { anchor: topLeft, focus: { row: range.bottom, col: range.right }, active: topLeft };
 }
 
+/** from행부터 to행까지 행 전체를 고른다. 활성 셀은 from행의 A열이다. (Excel과 같음) */
+export function selectRows(from: number, to: number, bounds: SheetBounds): Selection {
+  const anchor = { row: from, col: 0 };
+  return { anchor, focus: { row: to, col: bounds.colCount - 1 }, active: anchor };
+}
+
+/** from열부터 to열까지 열 전체를 고른다. 활성 셀은 from열의 1행이다. (Excel과 같음) */
+export function selectColumns(from: number, to: number, bounds: SheetBounds): Selection {
+  const anchor = { row: 0, col: from };
+  return { anchor, focus: { row: bounds.rowCount - 1, col: to }, active: anchor };
+}
+
+/**
+ * 범위가 행 전체("row")인지 열 전체("col")인지. 둘 다 아니면 null
+ * 시트 전체면 행 전체로 본다.
+ */
+export function wholeLines(range: CellRange, bounds: SheetBounds): "row" | "col" | null {
+  if (range.left === 0 && range.right === bounds.colCount - 1) return "row";
+  if (range.top === 0 && range.bottom === bounds.rowCount - 1) return "col";
+  return null;
+}
+
+/** 선택의 세 주소를 시트 안으로 잘라 넣는다. (행·열을 지워 시트가 줄었을 때) */
+export function clampSelection({ anchor, focus, active }: Selection, bounds: SheetBounds): Selection {
+  return { anchor: clampAddress(anchor, bounds), focus: clampAddress(focus, bounds), active: clampAddress(active, bounds) };
+}
+
 /** 선택이 덮는 사각형 범위 */
 export function selectionRange({ anchor, focus }: Selection): CellRange {
   return {
