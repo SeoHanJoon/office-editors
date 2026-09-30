@@ -15,6 +15,10 @@
       "dependsOn": ["transit"],
       "outputs": []
     },
+    "bench": {
+      "dependsOn": ["transit"],
+      "cache": false
+    },
     "dev": {
       "cache": false,
       "persistent": true
