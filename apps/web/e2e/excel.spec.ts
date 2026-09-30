@@ -41,20 +41,21 @@ test("첫 페이지의 Excel 링크로 들어갈 수 있다", async ({ page }) =
   await expect(grid(page)).toBeVisible();
 });
 
-test("1,000행 표를 휠로 끝까지 내리고 마지막 행을 클릭하면 선택된다", async ({ page }) => {
+test("10만 행 표를 휠로 끝까지 내리고 마지막 행을 클릭하면 선택된다", async ({ page }) => {
   const box = (await grid(page).boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 
+  // 10만 행은 200만 px라 한 번에 크게 굴린다.
   await expect(async () => {
-    await page.mouse.wheel(0, 5000);
-    expect((await state(page)).visible).toMatch(/:[A-Z]+1000$/);
+    await page.mouse.wheel(0, 500_000);
+    expect((await state(page)).visible).toMatch(/:[A-Z]+100000$/);
   }).toPass();
 
   // 끝까지 스크롤하면 마지막 행이 화면 아래쪽(가로 스크롤바 위)에 딱 붙는다.
   const clientHeight = await grid(page).evaluate((el) => el.clientHeight);
   await page.mouse.click(box.x + HEADER_WIDTH + COL_WIDTH * 1.5, box.y + clientHeight - ROW_HEIGHT / 2);
 
-  await expect(nameBox(page)).toHaveValue("B1000");
+  await expect(nameBox(page)).toHaveValue("B100000");
 });
 
 test("셀을 클릭하면 그 셀이 선택된다", async ({ page }) => {
@@ -116,14 +117,15 @@ test("Ctrl+방향키로 데이터 끝으로, Home과 Ctrl+Home으로 처음으�
   await clickCell(page, "A1");
 
   await page.keyboard.press("ControlOrMeta+ArrowDown");
-  await expect(nameBox(page)).toHaveValue("A1000");
-  expect((await state(page)).visible).toMatch(/1000$/);
+  await expect(nameBox(page)).toHaveValue("A100000");
+  expect((await state(page)).visible).toMatch(/100000$/);
 
+  // 예시 시트는 A~H열까지 채워져 있다.
   await page.keyboard.press("ControlOrMeta+ArrowRight");
-  await expect(nameBox(page)).toHaveValue("D1000");
+  await expect(nameBox(page)).toHaveValue("H100000");
 
   await page.keyboard.press("Home");
-  await expect(nameBox(page)).toHaveValue("A1000");
+  await expect(nameBox(page)).toHaveValue("A100000");
 
   await page.keyboard.press("ControlOrMeta+Home");
   await expect(nameBox(page)).toHaveValue("A1");
@@ -166,7 +168,7 @@ test.describe("셀 값 입력", () => {
   }
 
   test("글자를 치면 입력이 시작되고, Enter로 확정하면 아래 셀로 간다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
 
     await page.keyboard.type("Hello 123");
     await expect(editor(page)).toHaveValue("Hello 123");
@@ -174,14 +176,14 @@ test.describe("셀 값 입력", () => {
 
     await page.keyboard.press("Enter");
 
-    await expect(nameBox(page)).toHaveValue("F3");
-    expect(await cell(page, "F2")).toBe("Hello 123");
+    await expect(nameBox(page)).toHaveValue("L3");
+    expect(await cell(page, "L2")).toBe("Hello 123");
     expect((await state(page)).editing).toBeNull();
     await expect(editor(page)).toHaveValue("");
   });
 
   test("한글을 조합해서 입력해도 첫 글자가 사라지거나 두 번 들어가지 않는다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
 
     await typeKorean(page, [["ㅎ"]], { finish: false });
     // 첫 자모부터 입력창에 들어가고 입력이 시작된다.
@@ -192,40 +194,40 @@ test.describe("셀 값 입력", () => {
     await expect(editor(page)).toHaveValue("한글");
     await page.keyboard.press("Enter");
 
-    expect(await cell(page, "F2")).toBe("한글");
-    await expect(nameBox(page)).toHaveValue("F3");
+    expect(await cell(page, "L2")).toBe("한글");
+    await expect(nameBox(page)).toHaveValue("L3");
   });
 
   test("한글 조합 중에 다른 셀을 누르면 조합하던 글자까지 확정되고 새 셀에는 들어가지 않는다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await typeKorean(page, [["ㅅ", "셀"], ["ㄱ", "가"]], { finish: false });
     await expect(editor(page)).toHaveValue("셀가");
 
-    await clickCell(page, "G5");
+    await clickCell(page, "M5");
 
-    await expect(nameBox(page)).toHaveValue("G5");
-    expect(await cell(page, "F2")).toBe("셀가");
-    expect(await cell(page, "G5")).toBe("");
+    await expect(nameBox(page)).toHaveValue("M5");
+    expect(await cell(page, "L2")).toBe("셀가");
+    expect(await cell(page, "M5")).toBe("");
     await expect(editor(page)).toHaveValue("");
 
     // 조합이 끝났으므로 키가 입력기에 묶이지 않고 바로 동작한다.
     await page.keyboard.press("ArrowDown");
-    await expect(nameBox(page)).toHaveValue("G6");
+    await expect(nameBox(page)).toHaveValue("M6");
 
     // 새 셀에서 바로 한글을 쳐도 첫 글자부터 들어간다.
     await typeKorean(page, [["ㄴ", "나"]]);
     await page.keyboard.press("Tab");
-    expect(await cell(page, "G6")).toBe("나");
-    await expect(nameBox(page)).toHaveValue("H6");
+    expect(await cell(page, "M6")).toBe("나");
+    await expect(nameBox(page)).toHaveValue("N6");
   });
 
   test("글자를 쳐서 시작하면 방향키가 확정하고 옮기고, F2로 시작하면 입력창 안에서 커서를 옮긴다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await page.keyboard.type("abc");
     await page.keyboard.press("ArrowRight");
 
-    expect(await cell(page, "F2")).toBe("abc");
-    await expect(nameBox(page)).toHaveValue("G2");
+    expect(await cell(page, "L2")).toBe("abc");
+    await expect(nameBox(page)).toHaveValue("M2");
 
     await clickCell(page, "A1");
     await page.keyboard.press("F2");
@@ -267,28 +269,28 @@ test.describe("셀 값 입력", () => {
   });
 
   test("입력한 값을 Ctrl+Z로 되돌리고 Ctrl+Shift+Z로 다시 한다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await page.keyboard.type("첫째");
     await page.keyboard.press("Enter");
     await page.keyboard.type("둘째");
     await page.keyboard.press("Enter");
-    await expect(nameBox(page)).toHaveValue("F4");
+    await expect(nameBox(page)).toHaveValue("L4");
 
     // 되돌리면 그 셀이 선택된다.
     await page.keyboard.press("ControlOrMeta+z");
-    await expect(nameBox(page)).toHaveValue("F3");
-    expect(await cell(page, "F3")).toBe("");
-    expect(await cell(page, "F2")).toBe("첫째");
+    await expect(nameBox(page)).toHaveValue("L3");
+    expect(await cell(page, "L3")).toBe("");
+    expect(await cell(page, "L2")).toBe("첫째");
 
     await page.keyboard.press("ControlOrMeta+z");
-    await expect(nameBox(page)).toHaveValue("F2");
-    expect(await cell(page, "F2")).toBe("");
+    await expect(nameBox(page)).toHaveValue("L2");
+    expect(await cell(page, "L2")).toBe("");
 
     await page.keyboard.press("ControlOrMeta+Shift+z");
-    expect(await cell(page, "F2")).toBe("첫째");
+    expect(await cell(page, "L2")).toBe("첫째");
     await page.keyboard.press("ControlOrMeta+y");
-    expect(await cell(page, "F3")).toBe("둘째");
-    await expect(nameBox(page)).toHaveValue("F3");
+    expect(await cell(page, "L3")).toBe("둘째");
+    await expect(nameBox(page)).toHaveValue("L3");
   });
 
   test("Delete로 범위를 지우고 한 번에 되돌린다", async ({ page }) => {
@@ -318,18 +320,18 @@ test.describe("셀 값 입력", () => {
   });
 
   test("범위를 고른 채 입력하고 Enter를 누르면 범위 안에서 다음 칸으로 간다", async ({ page }) => {
-    await clickCell(page, "F2");
-    await clickCell(page, "G3", { shift: true });
+    await clickCell(page, "L2");
+    await clickCell(page, "M3", { shift: true });
 
     for (const value of ["가", "나", "다", "라"]) {
       await page.keyboard.type(value);
       await page.keyboard.press("Enter");
     }
 
-    expect(await Promise.all(["F2", "F3", "G2", "G3"].map((a1) => cell(page, a1)))).toEqual(["가", "나", "다", "라"]);
+    expect(await Promise.all(["L2", "L3", "M2", "M3"].map((a1) => cell(page, a1)))).toEqual(["가", "나", "다", "라"]);
     // 마지막 칸 다음은 첫 칸이고, 범위는 그대로다.
-    await expect(nameBox(page)).toHaveValue("F2");
-    expect((await state(page)).selection).toBe("F2:G3");
+    await expect(nameBox(page)).toHaveValue("L2");
+    expect((await state(page)).selection).toBe("L2:M3");
   });
 });
 
@@ -348,59 +350,59 @@ test.describe("수식", () => {
 
   test("=A2+A3을 입력하면 계산값이 보이고, 참조한 셀을 바꾸면 다시 계산된다", async ({ page }) => {
     // 예시 시트의 A열은 번호(A2=1, A3=2)다.
-    await enter(page, "F2", "=A2+A3");
+    await enter(page, "L2", "=A2+A3");
 
-    expect(await cell(page, "F2")).toBe("=A2+A3");
-    expect(await value(page, "F2")).toBe("3");
+    expect(await cell(page, "L2")).toBe("=A2+A3");
+    expect(await value(page, "L2")).toBe("3");
 
     await enter(page, "A2", "10");
-    expect(await value(page, "F2")).toBe("12");
+    expect(await value(page, "L2")).toBe("12");
 
     // undo하면 수식 결과도 돌아간다.
     await page.keyboard.press("ControlOrMeta+z");
-    expect(await value(page, "F2")).toBe("3");
+    expect(await value(page, "L2")).toBe("3");
   });
 
   test("=SUM(D2:D11)은 점수 10개의 합이다", async ({ page }) => {
     const scores = await Promise.all(Array.from({ length: 10 }, (_, i) => value(page, `D${i + 2}`)));
     const expected = scores.reduce((total, score) => total + Number(score), 0);
 
-    await enter(page, "F2", "=sum(D2:D11)");
+    await enter(page, "L2", "=sum(D2:D11)");
 
-    expect(await value(page, "F2")).toBe(String(expected));
+    expect(await value(page, "L2")).toBe(String(expected));
 
     // 수식 셀을 F2로 고치면 입력창에는 계산값이 아니라 수식이 보인다.
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await page.keyboard.press("F2");
     await expect(editor(page)).toHaveValue("=sum(D2:D11)");
   });
 
   test("문법이 틀린 수식은 확정되지 않고 알림이 뜨며, 고치면 확정된다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await page.keyboard.type("=SUM(A2:A4");
     await page.keyboard.press("Enter");
 
     // 입력이 이어지고 다음 셀로 가지 않는다.
     await expect(problemAlert(page)).toBeVisible();
-    await expect(nameBox(page)).toHaveValue("F2");
+    await expect(nameBox(page)).toHaveValue("L2");
     expect((await state(page)).editing).toBe("enter");
-    expect(await cell(page, "F2")).toBe("");
+    expect(await cell(page, "L2")).toBe("");
 
     // 다른 셀을 눌러도 선택이 옮겨지지 않는다.
-    await clickCell(page, "H5");
-    await expect(nameBox(page)).toHaveValue("F2");
+    await clickCell(page, "N5");
+    await expect(nameBox(page)).toHaveValue("L2");
 
     await page.keyboard.type(")");
     await expect(problemAlert(page)).toBeHidden();
     await page.keyboard.press("Enter");
 
-    await expect(nameBox(page)).toHaveValue("F3");
-    expect(await value(page, "F2")).toBe("6");
+    await expect(nameBox(page)).toHaveValue("L3");
+    expect(await value(page, "L2")).toBe("6");
     expect((await state(page)).problem).toBeNull();
   });
 
   test("Esc를 누르면 틀린 수식 입력을 취소하고 알림도 사라진다", async ({ page }) => {
-    await clickCell(page, "F2");
+    await clickCell(page, "L2");
     await page.keyboard.type("=1+");
     await page.keyboard.press("Enter");
     await expect(problemAlert(page)).toBeVisible();
@@ -409,18 +411,18 @@ test.describe("수식", () => {
 
     await expect(problemAlert(page)).toBeHidden();
     expect((await state(page)).editing).toBeNull();
-    expect(await cell(page, "F2")).toBe("");
+    expect(await cell(page, "L2")).toBe("");
   });
 
   test("서로를 참조하는 순환 참조는 #CYCLE!이고, 끊으면 다시 계산된다", async ({ page }) => {
-    await enter(page, "F2", "=G2+1");
-    await enter(page, "G2", "=F2+1");
+    await enter(page, "L2", "=M2+1");
+    await enter(page, "M2", "=L2+1");
 
-    expect(await value(page, "F2")).toBe("#CYCLE!");
-    expect(await value(page, "G2")).toBe("#CYCLE!");
+    expect(await value(page, "L2")).toBe("#CYCLE!");
+    expect(await value(page, "M2")).toBe("#CYCLE!");
 
-    await enter(page, "G2", "5");
+    await enter(page, "M2", "5");
 
-    expect(await value(page, "F2")).toBe("6");
+    expect(await value(page, "L2")).toBe("6");
   });
 });
