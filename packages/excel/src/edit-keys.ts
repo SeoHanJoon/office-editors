@@ -38,6 +38,8 @@ export type EditAction =
   | "selectRows"
   /** 고른 범위가 걸친 열 전체를 고른다. (Ctrl+Space, Mac에서 한/영 전환과 겹칠 때 쓰는 ⌥Space) */
   | "selectColumns"
+  /** 활성 셀 옆에 오른쪽 클릭 메뉴를 연다. (Shift+F10, 메뉴 키) */
+  | "openMenu"
   | "block";
 
 /**
@@ -64,6 +66,7 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
       if (shiftKey && !ctrlKey && !metaKey && !altKey) return "selectRows";
       if (!shiftKey && !metaKey && ctrlKey !== altKey) return "selectColumns";
     }
+    if (input.key === "ContextMenu" || (input.key === "F10" && input.shiftKey && !mod && !input.altKey)) return "openMenu";
     if (plain && input.key === "Delete") return "clear";
     if (plain && input.key === "Backspace") return "clearAndEnter";
     if (plain && input.key === "F2") return "edit";

@@ -81,6 +81,14 @@ describe("입력 중이 아닐 때", () => {
     expect(action("Shift+ ", "enter", "Space")).toBeNull();
   });
 
+  test("Shift+F10과 메뉴 키는 오른쪽 클릭 메뉴를 연다", () => {
+    expect(action("Shift+F10", null)).toBe("openMenu");
+    expect(action("ContextMenu", null)).toBe("openMenu");
+    expect(action("F10", null)).toBe("navigate");
+    // 입력 중에는 브라우저에 맡긴다.
+    expect(action("Shift+F10", "edit")).toBeNull();
+  });
+
   test("나머지 키는 이동 키인지 navigate에 묻는다", () => {
     for (const combo of ["ArrowDown", "Enter", "Tab", "a", "ㅎ", "Control+c", "Alt+z"]) {
       expect(action(combo, null)).toBe("navigate");

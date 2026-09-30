@@ -107,6 +107,8 @@ export class ContextMenu<T> {
     if (options.highlightFirst) this.highlight(nextEnabled(options.items, -1, 1));
 
     menu.addEventListener("keydown", this.onKeyDown);
+    // 메뉴 위에서 오른쪽 클릭하거나 메뉴 키를 눌러도 브라우저 메뉴가 겹쳐 뜨지 않게 한다.
+    menu.addEventListener("contextmenu", (event) => event.preventDefault());
     // 메뉴를 연 오른쪽 클릭이 끝난 뒤부터 듣는다. 캡처 단계에서 들어서 다른 코드가 이벤트를 막아도 닫힌다.
     document.addEventListener("pointerdown", this.onOutsidePointer, true);
     document.addEventListener("scroll", this.onScroll, true);

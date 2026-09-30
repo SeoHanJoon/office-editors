@@ -1,4 +1,5 @@
 import type { History } from "@office/command-core";
+import { ContextMenu } from "@office/ui";
 import type { CellAddress, CellRange } from "./address";
 import { CellEditor } from "./cell-editor";
 import {
@@ -13,9 +14,11 @@ import {
 import { editAction, type EditMode } from "./edit-keys";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
+import { gridMenu, type GridMenuCommand, type GridMenuTarget } from "./grid-menu";
 import { navigate } from "./keyboard";
 import {
   DEFAULT_LAYOUT,
+  cellRect,
   contentSize,
   isInHeader,
   pageRows,
@@ -26,12 +29,13 @@ import {
   type GridLayout,
   type Viewport,
 } from "./layout";
-import { drawGrid } from "./render";
+import { CELL_FONT, drawGrid } from "./render";
 import {
   clampSelection,
   expandToLines,
   extendTo,
   focusToReveal,
+  sameAddress,
   sameSelection,
   selectAll,
   selectCell,
@@ -44,7 +48,7 @@ import {
 } from "./selection";
 import { SetCellsCommand } from "./set-cells-command";
 import type { CellChange, Sheet } from "./sheet";
-import type { StructureChange } from "./structure";
+import { canChangeStructure, type StructureChange } from "./structure";
 import { StructureCommand } from "./structure-command";
 
 export interface GridViewOptions {
@@ -63,6 +67,9 @@ interface Copied {
   readonly text: string;
   readonly cut: boolean;
 }
+
+/** Mac이면 단축키를 ⌘로 보여주고, Ctrl+클릭을 오른쪽 클릭으로 본다. */
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** 클립보드를 거치며 줄바꿈 모양이나 끝 줄바꿈이 바뀌어도 같은 글자로 본다. */
 function sameClipboardText(a: string, b: string): boolean {
@@ -84,6 +91,8 @@ function sameClipboardText(a: string, b: string): boolean {
  *
  * 복사/잘라내기/붙여넣기는 입력창의 copy·cut·paste 이벤트로 받는다. 클립보드에는 Excel과 같은 text/plain(보이는 값)을 넣고,
  * 복사한 범위를 기억해 두었다가 붙여넣을 글자가 그때 넣은 글자와 같으면 수식째 붙인다. (Excel과 같은 방식)
+ *
+ * 오른쪽 클릭, Shift+F10, 메뉴 키로 메뉴(@office/ui의 ContextMenu)를 연다. 메뉴의 복사·붙여넣기는 Clipboard API를 쓴다. (ADR 0029)
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -96,6 +105,11 @@ export class GridView {
   /** 표 전체 크기의 빈 div. 브라우저가 이 크기로 스크롤바를 만든다. 행·열을 넣고 빼면 크기를 바꾼다. */
   private readonly spacer: HTMLDivElement;
   private readonly editor: CellEditor;
+  /** 클립보드 읽기가 막혔을 때 등 잠깐 띄우는 알림 */
+  private readonly notice: HTMLDivElement;
+  private noticeTimer = 0;
+  /** 열려 있는 오른쪽 클릭 메뉴 */
+  private menu: ContextMenu<GridMenuCommand> | null = null;
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribeSheet: () => void;
   private readonly unsubscribeStructure: () => void;
@@ -142,6 +156,15 @@ export class GridView {
     this.scroller.append(this.spacer);
     this.root.append(this.canvas, this.scroller);
     this.editor = new CellEditor(this.root, layout);
+    this.notice = document.createElement("div");
+    this.notice.setAttribute("role", "status");
+    this.notice.style.cssText = [
+      `position:absolute;left:50%;top:${layout.headerHeight + 8}px;transform:translateX(-50%);max-width:90%`,
+      "padding:6px 12px;border-radius:4px;background:#323232;color:#ffffff;pointer-events:none",
+      `font:${CELL_FONT};box-shadow:0 2px 6px rgba(0,0,0,0.2)`,
+    ].join(";");
+    this.notice.hidden = true;
+    this.root.append(this.notice);
     container.append(this.root);
 
     this.scroller.addEventListener("scroll", this.requestRender);
@@ -151,6 +174,7 @@ export class GridView {
     this.scroller.addEventListener("pointerup", this.onPointerUp);
     this.scroller.addEventListener("pointercancel", this.onPointerUp);
     this.scroller.addEventListener("dblclick", this.onDoubleClick);
+    this.scroller.addEventListener("contextmenu", this.onContextMenu);
     const input = this.editor.element;
     input.addEventListener("keydown", this.onKeyDown);
     input.addEventListener("beforeinput", this.onBeforeInput);
@@ -159,6 +183,7 @@ export class GridView {
     input.addEventListener("copy", this.onCopy);
     input.addEventListener("cut", this.onCut);
     input.addEventListener("paste", this.onPaste);
+    input.addEventListener("contextmenu", this.onKeyboardContextMenu);
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
     this.unsubscribeStructure = sheet.onStructureChange(this.onStructureChange);
     // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
@@ -198,8 +223,15 @@ export class GridView {
     this.editor.focus();
   }
 
+  /** 떠 있는 알림 글자(클립보드가 막혔을 때 등). 없으면 null */
+  get noticeMessage(): string | null {
+    return this.notice.hidden ? null : this.notice.textContent;
+  }
+
   destroy(): void {
     cancelAnimationFrame(this.frame);
+    clearTimeout(this.noticeTimer);
+    this.menu?.close();
     this.resizeObserver.disconnect();
     this.unsubscribeSheet();
     this.unsubscribeStructure();
@@ -317,14 +349,16 @@ export class GridView {
     if (!axis) return;
     const index = axis === "row" ? range.top : range.left;
     const count = axis === "row" ? range.bottom - range.top + 1 : range.right - range.left + 1;
-    const size = axis === "row" ? this.sheet.rowCount : this.sheet.colCount;
-    if (kind === "delete" && count >= size) return;
+    this.changeStructure({ kind, axis, index, count });
+  }
+
+  /** 행·열을 넣거나 지운다. 시트가 비거나 최대 크기(1,048,576행 × 16,384열)를 넘게 되면 하지 않는다. 선택은 같은 자리에 둔다. */
+  private changeStructure(change: StructureChange): void {
+    if (!canChangeStructure(change, this.sheet)) return;
     this.clearCopied();
     this.applying = true;
     try {
-      this.history.execute(new StructureCommand(this.sheet, { kind, axis, index, count }));
-    } catch (error) {
-      if (!(error instanceof RangeError)) throw error; // 최대 크기(1,048,576행 × 16,384열)를 넘음
+      this.history.execute(new StructureCommand(this.sheet, change));
     } finally {
       this.applying = false;
     }
@@ -354,15 +388,20 @@ export class GridView {
     this.requestRender();
   }
 
+  /** 선택 범위의 보이는 값을 클립보드에 넣을 글자로 만들고, 범위를 기억해 점선을 그린다. */
+  private copySelection(cut: boolean): string {
+    const range = selectionRange(this.currentSelection);
+    const text = copyText(this.sheet, this.engine, range);
+    this.copied = { range, text, cut };
+    this.requestRender();
+    return text;
+  }
+
   /** 입력 중이 아니면 선택 범위의 보이는 값을 클립보드에 넣고 범위를 기억한다. 입력 중이면 입력창 글자 복사(브라우저 기본) */
   private copy(event: ClipboardEvent, cut: boolean): void {
     if (this.editor.mode || !event.clipboardData) return;
     event.preventDefault();
-    const range = selectionRange(this.currentSelection);
-    const text = copyText(this.sheet, this.engine, range);
-    event.clipboardData.setData("text/plain", text);
-    this.copied = { range, text, cut };
-    this.requestRender();
+    event.clipboardData.setData("text/plain", this.copySelection(cut));
   }
 
   private readonly onCopy = (event: ClipboardEvent): void => this.copy(event, false);
@@ -480,6 +519,10 @@ export class GridView {
         event.preventDefault(); // 입력창에 공백이 들어가 입력이 시작되지 않게
         this.select(expandToLines(this.currentSelection, action === "selectRows" ? "row" : "col", this.sheet), "none");
         return;
+      case "openMenu":
+        event.preventDefault();
+        this.openMenuAtActive();
+        return;
       case "cancel":
         event.preventDefault();
         if (this.editor.mode) this.editor.stop();
@@ -523,7 +566,8 @@ export class GridView {
   };
 
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    // Mac의 Ctrl+클릭은 오른쪽 클릭이다. contextmenu 이벤트에서 처리한다.
+    if (event.button !== 0 || (MAC && event.ctrlKey)) return;
     const point = this.localPoint(event);
     // 스크롤바를 누른 것은 브라우저에 맡긴다.
     if (point.x >= this.scroller.clientWidth || point.y >= this.scroller.clientHeight) return;
@@ -590,6 +634,142 @@ export class GridView {
     this.startEditing("edit", this.sheet.get(this.currentSelection.active));
   };
 
+  /**
+   * 오른쪽 클릭하면 메뉴를 연다. 누른 곳이 선택 안이면 선택을 두고, 밖이면 그 셀·줄을 고른다. (Excel과 같음)
+   * 입력 중인 셀을 누르면 브라우저 기본 메뉴를 쓰고, 다른 곳을 누르면 왼쪽 클릭처럼 먼저 입력을 확정한다.
+   */
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    const point = this.localPoint(event);
+    // 스크롤바는 브라우저에 맡긴다.
+    if (point.x >= this.scroller.clientWidth || point.y >= this.scroller.clientHeight) return;
+    const viewport = this.viewport();
+    const header = pointToHeader(this.layout, viewport, this.sheet, point.x, point.y);
+    const corner = !header && isInHeader(this.layout, point.x, point.y);
+    const cell = pointToCell(this.layout, viewport, this.sheet, point.x, point.y);
+    const editing = this.editor.address;
+    if (editing && !header && !corner && sameAddress(cell, editing)) return;
+    event.preventDefault();
+    const committed = this.commit();
+    this.focus();
+    if (!committed) return;
+
+    const range = selectionRange(this.currentSelection);
+    let target: GridMenuTarget = "cell";
+    if (header) {
+      const { axis, index } = header;
+      const inside =
+        axis === "row"
+          ? range.left === 0 && range.right === this.sheet.colCount - 1 && index >= range.top && index <= range.bottom
+          : range.top === 0 && range.bottom === this.sheet.rowCount - 1 && index >= range.left && index <= range.right;
+      if (!inside) this.select(axis === "row" ? selectRows(index, index, this.sheet) : selectColumns(index, index, this.sheet), "none");
+      target = axis;
+    } else if (corner) {
+      this.select(selectAll(this.currentSelection, this.sheet), "none");
+    } else {
+      const inside = cell.row >= range.top && cell.row <= range.bottom && cell.col >= range.left && cell.col <= range.right;
+      if (!inside) this.select(selectCell(cell), "none");
+    }
+    this.openMenu(target, event.clientX, event.clientY, false);
+  };
+
+  /**
+   * 입력창에 온 contextmenu 이벤트. 입력창은 마우스를 받지 않으므로 키보드(메뉴 키, Windows의 Shift+F10)로 연 것이다.
+   * keydown에서 이미 메뉴를 열었으면 브라우저 메뉴만 막는다. 입력 중이면 브라우저 기본 메뉴를 쓴다.
+   */
+  private readonly onKeyboardContextMenu = (event: MouseEvent): void => {
+    if (this.editor.mode) return;
+    event.preventDefault();
+    if (!this.menu) this.openMenuAtActive();
+  };
+
+  /** 활성 셀 아래에 메뉴를 연다. 줄 전체를 골랐으면 그 줄의 메뉴다. 첫 항목을 가리킨 채 연다. */
+  private openMenuAtActive(): void {
+    const { active } = this.currentSelection;
+    const target = wholeLines(selectionRange(this.currentSelection), this.sheet) ?? "cell";
+    const { scrollLeft, scrollTop } = this.scroller;
+    this.reveal(active);
+    const open = () => {
+      const rect = cellRect(this.layout, this.viewport(), active);
+      const box = this.scroller.getBoundingClientRect();
+      this.openMenu(target, box.left + rect.x, box.top + rect.y + rect.height, true);
+    };
+    // 스크롤했으면 스크롤 이벤트가 지나간 뒤 연다. 메뉴는 스크롤하면 닫히기 때문이다.
+    if (scrollLeft !== this.scroller.scrollLeft || scrollTop !== this.scroller.scrollTop) requestAnimationFrame(open);
+    else open();
+  }
+
+  private openMenu(target: GridMenuTarget, x: number, y: number, keyboard: boolean): void {
+    this.menu?.close();
+    this.menu = new ContextMenu({
+      items: gridMenu(target, selectionRange(this.currentSelection), this.sheet, { mac: MAC }),
+      x,
+      y,
+      highlightFirst: keyboard,
+      label: "셀 메뉴",
+      onSelect: this.runMenuCommand,
+      onClose: () => {
+        this.menu = null;
+        this.focus();
+      },
+    });
+  }
+
+  /** 메뉴에서 고른 동작을 한다. 동작마다 history에 한 번 들어가 undo 한 번에 되돌아간다. */
+  private readonly runMenuCommand = (command: GridMenuCommand): void => {
+    switch (command.type) {
+      case "copy":
+      case "cut":
+        this.writeClipboard(command.type === "cut");
+        return;
+      case "paste":
+        void this.pasteFromClipboard();
+        return;
+      case "clear":
+        this.clearSelection();
+        return;
+      case "structure":
+        this.changeStructure(command.change);
+        return;
+    }
+  };
+
+  /** 메뉴의 복사·잘라내기. 단축키와 같은 글자를 Clipboard API로 넣는다. 막히면 점선을 지우고 단축키를 쓰라고 알린다. */
+  private writeClipboard(cut: boolean): void {
+    const text = this.copySelection(cut);
+    const fail = () => {
+      this.clearCopied();
+      this.showNotice(`브라우저가 클립보드 쓰기를 막았습니다. ${shortcut(cut ? "X" : "C")}를 쓰세요.`);
+    };
+    try {
+      // Safari는 사용자가 누른 그 순간에 불러야 하므로 기다리지 않고 바로 부른다.
+      navigator.clipboard.writeText(text).catch(fail);
+    } catch {
+      fail();
+    }
+  }
+
+  /** 메뉴의 붙여넣기. Clipboard API로 읽어 단축키 붙여넣기와 같은 방법으로 붙인다. 막히면 아무것도 바꾸지 않고 알린다. */
+  private async pasteFromClipboard(): Promise<void> {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      this.showNotice(`브라우저가 클립보드 읽기를 막았습니다. ${shortcut("V")}를 쓰세요.`);
+      return;
+    }
+    // 권한을 묻는 동안 입력을 시작했으면 붙이지 않는다.
+    if (this.editor.mode) return;
+    this.paste(text);
+  }
+
+  /** 표 위쪽에 알림을 잠깐 띄운다. */
+  private showNotice(message: string): void {
+    this.notice.textContent = message;
+    this.notice.hidden = false;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => (this.notice.hidden = true), 5000);
+  }
+
   /** 이벤트 좌표를 표 왼쪽 위 기준으로 바꾼다. */
   private localPoint(event: MouseEvent): { x: number; y: number } {
     const box = this.scroller.getBoundingClientRect();
@@ -633,4 +813,9 @@ export class GridView {
       viewport,
     });
   }
+}
+
+/** 글자 단축키를 이 기기에 맞게 쓴다. ("⌘V", "Ctrl+V") */
+function shortcut(letter: string): string {
+  return MAC ? `⌘${letter}` : `Ctrl+${letter}`;
 }

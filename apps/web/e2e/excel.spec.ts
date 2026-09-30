@@ -20,11 +20,32 @@ async function cellCenter(page: Page, a1: string) {
   };
 }
 
-async function clickCell(page: Page, a1: string, { shift = false } = {}) {
+async function clickCell(
+  page: Page,
+  a1: string,
+  { shift = false, button = "left" }: { shift?: boolean; button?: "left" | "right" } = {},
+) {
   const { x, y } = await cellCenter(page, a1);
   if (shift) await page.keyboard.down("Shift");
-  await page.mouse.click(x, y);
+  await page.mouse.click(x, y, { button });
   if (shift) await page.keyboard.up("Shift");
+}
+
+/** 스크롤하지 않은 표에서 행 번호(3) 또는 열 이름("C") 머리글을 누른다. */
+async function clickHeader(
+  page: Page,
+  header: number | string,
+  { shift = false, button = "left" }: { shift?: boolean; button?: "left" | "right" } = {},
+) {
+  const box = (await grid(page).boundingBox())!;
+  const point =
+    typeof header === "number"
+      ? { x: box.x + HEADER_WIDTH / 2, y: box.y + HEADER_HEIGHT + (header - 1) * ROW_HEIGHT + ROW_HEIGHT / 2 }
+      : { x: box.x + HEADER_WIDTH + (header.charCodeAt(0) - 65) * COL_WIDTH + COL_WIDTH / 2, y: box.y + HEADER_HEIGHT / 2 };
+  if (shift) await page.keyboard.down("Shift");
+  await page.mouse.click(point.x, point.y, { button });
+  if (shift) await page.keyboard.up("Shift");
+  return point;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -556,19 +577,6 @@ test.describe("행·열 삽입/삭제", () => {
   const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
   const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
 
-  /** 스크롤하지 않은 표에서 행 번호(3) 또는 열 이름("C") 머리글을 누른다. */
-  async function clickHeader(page: Page, header: number | string, { shift = false } = {}) {
-    const box = (await grid(page).boundingBox())!;
-    const point =
-      typeof header === "number"
-        ? { x: box.x + HEADER_WIDTH / 2, y: box.y + HEADER_HEIGHT + (header - 1) * ROW_HEIGHT + ROW_HEIGHT / 2 }
-        : { x: box.x + HEADER_WIDTH + (header.charCodeAt(0) - 65) * COL_WIDTH + COL_WIDTH / 2, y: box.y + HEADER_HEIGHT / 2 };
-    if (shift) await page.keyboard.down("Shift");
-    await page.mouse.click(point.x, point.y);
-    if (shift) await page.keyboard.up("Shift");
-    return point;
-  }
-
   const insert = (page: Page) => page.keyboard.press("ControlOrMeta+Shift+Equal");
   const remove = (page: Page) => page.keyboard.press("ControlOrMeta+Minus");
 
@@ -702,5 +710,191 @@ test.describe("전체 선택과 줄 선택", () => {
     await page.keyboard.press("Shift+Space");
     await page.keyboard.press("ControlOrMeta+Minus");
     expect((await state(page)).rowCount).toBe(99_999);
+  });
+});
+
+test.describe("오른쪽 클릭 메뉴", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const menu = (page: Page) => page.getByRole("menu", { name: "셀 메뉴" });
+  const item = (page: Page, name: string) => menu(page).getByRole("menuitem", { name, exact: true });
+  const choose = (page: Page, name: string) => item(page, name).click();
+  const undo = (page: Page) => page.keyboard.press("ControlOrMeta+z");
+
+  test("행 번호를 오른쪽 클릭해 위·아래에 행을 넣고, 각각 undo 한 번에 되돌린다", async ({ page }) => {
+    const first = await cell(page, "A3");
+    await clickHeader(page, 3, { button: "right" });
+    expect((await state(page)).selection).toBe("A3:AX3");
+    await expect(menu(page).getByRole("menuitem")).toHaveText([
+      /^잘라내기/, /^복사/, /^붙여넣기/, /^위에 행 넣기/, /^아래에 행 넣기/, /^행 삭제/, /^내용 지우기/,
+    ]);
+
+    await choose(page, "위에 행 넣기");
+    await expect(menu(page)).toBeHidden();
+    expect((await state(page)).rowCount).toBe(100_001);
+    expect(await cell(page, "A3")).toBe("");
+    expect(await cell(page, "A4")).toBe(first);
+    expect((await state(page)).selection).toBe("A3:AX3");
+    await undo(page);
+    expect((await state(page)).rowCount).toBe(100_000);
+    expect(await cell(page, "A3")).toBe(first);
+
+    await clickHeader(page, 3, { button: "right" });
+    await choose(page, "아래에 행 넣기");
+    expect(await cell(page, "A3")).toBe(first);
+    expect(await cell(page, "A4")).toBe("");
+    expect((await state(page)).selection).toBe("A3:AX3");
+    await undo(page);
+    expect((await state(page)).rowCount).toBe(100_000);
+  });
+
+  test("여러 줄을 고른 채 선택 안을 오른쪽 클릭하면 선택을 두고 고른 줄 수만큼 넣는다. 밖이면 그 줄로 옮긴다", async ({ page }) => {
+    await clickHeader(page, 3);
+    await clickHeader(page, 5, { shift: true });
+    await clickHeader(page, 4, { button: "right" });
+    expect((await state(page)).selection).toBe("A3:AX5");
+    await expect(item(page, "위에 행 3개 넣기")).toBeVisible();
+    await expect(item(page, "행 3개 삭제")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toBeHidden();
+    await clickHeader(page, 8, { button: "right" });
+    expect((await state(page)).selection).toBe("A8:AX8");
+    await choose(page, "행 삭제");
+    expect((await state(page)).rowCount).toBe(99_999);
+  });
+
+  test("열 이름을 오른쪽 클릭해 오른쪽에 열을 넣으면 수식 범위가 따라간다", async ({ page }) => {
+    await clickHeader(page, "E", { button: "right" });
+    await choose(page, "오른쪽에 열 넣기");
+    expect((await state(page)).colCount).toBe(51);
+    expect((await state(page)).selection).toBe("E1:E100000");
+    expect(await cell(page, "H2")).toBe("=SUM(D2:G2)");
+    await undo(page);
+    expect((await state(page)).colCount).toBe(50);
+    expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
+  });
+
+  test("셀 범위를 오른쪽 클릭해 내용을 지우고, 걸친 행 전체를 지운다. 각각 undo 한 번이다", async ({ page }) => {
+    const before = await Promise.all(["B3", "C4", "A5"].map((a1) => cell(page, a1)));
+    await clickCell(page, "B3");
+    await clickCell(page, "C4", { shift: true });
+
+    await clickCell(page, "C3", { button: "right" });
+    expect((await state(page)).selection).toBe("B3:C4");
+    await choose(page, "내용 지우기");
+    expect(await Promise.all(["B3", "C4"].map((a1) => cell(page, a1)))).toEqual(["", ""]);
+    await undo(page);
+    expect(await Promise.all(["B3", "C4"].map((a1) => cell(page, a1)))).toEqual(before.slice(0, 2));
+
+    await clickCell(page, "B3", { button: "right" });
+    await choose(page, "행 2개 삭제");
+    expect((await state(page)).rowCount).toBe(99_998);
+    expect(await cell(page, "A3")).toBe(before[2]);
+    await undo(page);
+    expect((await state(page)).rowCount).toBe(100_000);
+
+    // 선택 밖을 오른쪽 클릭하면 그 셀로 옮긴다.
+    await clickCell(page, "E7", { button: "right" });
+    expect((await state(page)).selection).toBe("E7");
+    await expect(item(page, "위에 행 넣기")).toBeVisible();
+  });
+
+  test("시트를 비우게 되는 삭제는 흐리게 보이고 고를 수 없다", async ({ page }) => {
+    await page.keyboard.press("ControlOrMeta+a");
+    await clickCell(page, "C3", { button: "right" });
+    expect((await state(page)).selection).toBe("A1:AX100000");
+    await expect(item(page, "행 100000개 삭제")).toHaveAttribute("aria-disabled", "true");
+    await expect(item(page, "열 50개 삭제")).toHaveAttribute("aria-disabled", "true");
+    // 흐린 항목은 Playwright가 누를 수 없다고 보고 기다리므로 강제로 누른다.
+    await item(page, "행 100000개 삭제").click({ force: true });
+    await expect(menu(page)).toBeVisible();
+    expect((await state(page)).rowCount).toBe(100_000);
+  });
+
+  test("왼쪽 위 모서리를 오른쪽 클릭하면 시트 전체를 고르고 메뉴를 연다", async ({ page }) => {
+    const box = (await grid(page).boundingBox())!;
+    await page.mouse.click(box.x + HEADER_WIDTH / 2, box.y + HEADER_HEIGHT / 2, { button: "right" });
+    expect((await state(page)).selection).toBe("A1:AX100000");
+    await expect(menu(page)).toBeVisible();
+  });
+
+  test("Shift+F10으로 열고 ↑↓·Enter로 고른다. Esc로 닫으면 표에 다시 입력할 수 있다", async ({ page }) => {
+    await clickCell(page, "B3");
+    await page.keyboard.press("Shift+F10");
+    await expect(menu(page)).toBeVisible();
+    await expect(item(page, "잘라내기")).toHaveCSS("background-color", "rgb(232, 243, 236)");
+    await expect(item(page, "잘라내기")).toHaveAttribute("aria-keyshortcuts", /X$/);
+
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toBeHidden();
+    await page.keyboard.type("가나");
+    await page.keyboard.press("Enter");
+    expect(await cell(page, "B3")).toBe("가나");
+
+    await clickCell(page, "B3");
+    await page.keyboard.press("Shift+F10");
+    // 잘라내기 → 복사 → 붙여넣기 → 내용 지우기 (구분선은 건너뛴다)
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(menu(page)).toBeHidden();
+    expect(await cell(page, "B3")).toBe("");
+    await undo(page);
+    expect(await cell(page, "B3")).toBe("가나");
+  });
+
+  test("바깥을 누르거나 스크롤하면 메뉴가 닫힌다", async ({ page }) => {
+    await clickCell(page, "B3", { button: "right" });
+    await expect(menu(page)).toBeVisible();
+    // 메뉴가 덮지 않는 셀을 누른다. 메뉴는 닫히고 누른 셀이 선택된다.
+    await clickCell(page, "H5");
+    await expect(menu(page)).toBeHidden();
+    expect((await state(page)).selection).toBe("H5");
+
+    await clickCell(page, "B3", { button: "right" });
+    await expect(menu(page)).toBeVisible();
+    await page.mouse.wheel(0, 200);
+    await expect(menu(page)).toBeHidden();
+  });
+
+  test("메뉴로 복사해 붙여넣으면 단축키와 같이 수식째 붙고, undo 한 번에 되돌린다", async ({ page }) => {
+    const before = await cell(page, "H5");
+    await clickCell(page, "G2");
+    await clickCell(page, "G3", { shift: true });
+    await clickCell(page, "G2", { button: "right" });
+    await choose(page, "복사");
+    expect((await state(page)).copied).toBe("G2:G3");
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboard.split("\r\n")).toHaveLength(3);
+
+    await clickCell(page, "H5", { button: "right" });
+    await choose(page, "붙여넣기");
+    await expect.poll(() => cell(page, "H5")).toBe("=SUM(E5:G5)");
+    expect(await cell(page, "H6")).toBe("=SUM(E6:G6)");
+    expect((await state(page)).selection).toBe("H5:H6");
+    await undo(page);
+    expect(await cell(page, "H5")).toBe(before);
+  });
+
+  test("메뉴로 잘라내 붙여넣으면 셀이 옮겨진다", async ({ page }) => {
+    const value = await cell(page, "B2");
+    await clickCell(page, "B2", { button: "right" });
+    await choose(page, "잘라내기");
+    await clickCell(page, "M2", { button: "right" });
+    await choose(page, "붙여넣기");
+    await expect.poll(() => cell(page, "M2")).toBe(value);
+    expect(await cell(page, "B2")).toBe("");
+  });
+
+  test("브라우저가 클립보드 읽기를 막으면 아무것도 바꾸지 않고 단축키를 쓰라고 알린다", async ({ page }) => {
+    await page.evaluate(() => {
+      navigator.clipboard.readText = () => Promise.reject(new DOMException("막음", "NotAllowedError"));
+    });
+    const before = await cell(page, "B2");
+    await clickCell(page, "B2", { button: "right" });
+    await choose(page, "붙여넣기");
+    await expect(page.getByRole("status")).toHaveText(/클립보드 읽기를 막았습니다\. (Ctrl\+V|⌘V)를 쓰세요\./);
+    expect(await cell(page, "B2")).toBe(before);
   });
 });
