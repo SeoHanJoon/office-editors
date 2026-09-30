@@ -39,7 +39,7 @@ type SelectionListener = (selection: Selection) => void;
  * 키보드 입력은 활성 셀 위에 늘 떠 있는 입력창(CellEditor)이 받는다.
  *
  * 셀 값은 모두 SetCellsCommand로 history에 넣어 바꾼다. undo/redo로 값이 바뀌면 그 셀들을 선택한다.
- * 셀에는 engine의 계산값을 그리고, 입력창에는 입력한 글자(수식)를 그대로 보여준다.
+ * 셀에는 engine의 계산값을 그리고(계산 중인 칸은 회색 "…"), 입력창에는 입력한 글자(수식)를 그대로 보여준다.
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -52,6 +52,7 @@ export class GridView {
   private readonly editor: CellEditor;
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribeSheet: () => void;
+  private readonly unsubscribeEngine: () => void;
   private readonly listeners = new Set<SelectionListener>();
   private currentSelection: Selection = selectCell({ row: 0, col: 0 });
   private frame = 0;
@@ -106,6 +107,8 @@ export class GridView {
     input.addEventListener("input", this.onInput);
     input.addEventListener("compositionstart", this.onCompositionStart);
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
+    // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
+    this.unsubscribeEngine = engine.onChange(this.requestRender);
     this.resizeObserver = new ResizeObserver(this.requestRender);
     this.resizeObserver.observe(this.scroller);
     this.render();
@@ -145,6 +148,7 @@ export class GridView {
     cancelAnimationFrame(this.frame);
     this.resizeObserver.disconnect();
     this.unsubscribeSheet();
+    this.unsubscribeEngine();
     this.listeners.clear();
     this.root.remove();
   }

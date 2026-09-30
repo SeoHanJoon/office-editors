@@ -24,9 +24,10 @@ export function collectNumbers(args: readonly FunctionArg[]): number[] | Formula
     if (arg.kind === "missing") {
       numbers.push(0);
     } else if (arg.kind === "reference") {
+      // 큰 범위에서 칸마다 에러 확인을 하지 않도록 가장 흔한 숫자부터 본다.
       for (const value of arg.values) {
-        if (value instanceof FormulaError) return value;
         if (typeof value === "number") numbers.push(value);
+        else if (value instanceof FormulaError) return value;
       }
     } else {
       const number = directNumber(arg.value);

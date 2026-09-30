@@ -1,8 +1,9 @@
 import { History } from "@office/command-core";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { parseA1, toA1 } from "./address";
 import { FormulaEngine } from "./formula-engine";
 import { FormulaError, formatValue } from "./formula-value";
+import { bigSumSheet, chainSheet, scoreSheet } from "./perf-sheets";
 import { SetCellsCommand } from "./set-cells-command";
 import { Sheet } from "./sheet";
 
@@ -156,6 +157,38 @@ describe("다시 계산", () => {
     expect(show("B1")).toBe("10");
   });
 
+  test("처음 읽을 때 범위로 이어진 수식도 참조되는 쪽부터 계산한다", () => {
+    const { show } = setup({ A1: "=SUM(B1:B3)", B2: "=C1*2", C1: "5" });
+
+    expect(show("A1")).toBe("10");
+  });
+
+  test("같은 셀을 셀과 범위로 여러 번 참조해도 한 번만 다시 계산한다", () => {
+    const { set, show, notified } = setup({ A1: "1", B1: "=A1+SUM(A1:A2)+SUM(A1:A1)" });
+
+    set({ A1: "2" });
+
+    expect(show("B1")).toBe("6");
+    expect(notified).toEqual([["A1", "B1"]]);
+  });
+
+  test("수식과 값을 함께 바꾸면 값에 이어진 수식도 다시 계산한다", () => {
+    const { set, show } = setup({ A1: "1", B1: "=A1*2", C1: "=B1+1" });
+
+    set({ A1: "3", C1: "=B1+2" });
+
+    expect(show("B1")).toBe("6");
+    expect(show("C1")).toBe("8");
+  });
+
+  test("모든 수식을 값과 함께 바꿔도 참조되는 쪽부터 계산한다", () => {
+    const { set, show } = setup({ A1: "1", B1: "=A1*2", C1: "=B1+1" });
+
+    set({ C1: "=B1+1", B1: "=A1*3", A1: "3" });
+
+    expect(show("C1")).toBe("10");
+  });
+
   test("1만 개가 이어진 수식도 스택이 넘치지 않고 계산한다", () => {
     const sheet = new Sheet({ rowCount: 10_000, colCount: 1 });
     sheet.setCells(
@@ -222,4 +255,176 @@ test("destroy하면 시트 변경을 더는 반영하지 않는다", () => {
   new SetCellsCommand(sheet, [{ address: at("A1"), value: "2" }]).execute();
 
   expect(show("B1")).toBe("1");
+});
+
+describe("나눠서 계산 (background)", () => {
+  const ROWS = 2000;
+
+  /** A{r}=r, B{r}=A{r}*2, C1=SUM(B1:B2000). C1은 다른 수식 2,000개를 기다려야 한다. */
+  function bigSheet(extra: Record<string, string> = {}) {
+    const sheet = new Sheet({ rowCount: ROWS, colCount: 5 });
+    const changes = [];
+    for (let row = 0; row < ROWS; row++) {
+      changes.push({ address: { row, col: 0 }, value: String(row + 1) });
+      changes.push({ address: { row, col: 1 }, value: `=A${row + 1}*2` });
+    }
+    changes.push({ address: at("C1"), value: `=SUM(B1:B${ROWS})` });
+    for (const [a1, value] of Object.entries(extra)) changes.push({ address: at(a1), value });
+    sheet.setCells(changes);
+    return sheet;
+  }
+
+  const SUM_B = ROWS * (ROWS + 1);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // 시계를 부를 때마다 5ms씩 가게 해서, 한 번에 조금씩만 계산하게 한다.
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 5));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("background 없이 만들면 바로 모두 계산돼 있다", () => {
+    const engine = new FormulaEngine(bigSheet());
+
+    expect(engine.calculating).toBe(false);
+    expect(engine.getValue(at("C1"))).toBe(SUM_B);
+  });
+
+  test("background로 만들면 계산 중이고, 타이머가 돌면 끝나서 한 번에 계산한 결과와 같다", () => {
+    const engine = new FormulaEngine(bigSheet(), { background: true });
+
+    expect(engine.calculating).toBe(true);
+    vi.runAllTimers();
+
+    expect(engine.calculating).toBe(false);
+    expect(engine.getValue(at("C1"))).toBe(SUM_B);
+    expect(engine.getValue(at("B2000"))).toBe(4000);
+    expect(engine.isPending(at("C1"))).toBe(false);
+  });
+
+  test("계산 중에도 값 셀과, 값만 참조하는 수식은 바로 읽는다", () => {
+    const engine = new FormulaEngine(bigSheet(), { background: true });
+
+    expect(engine.getValue(at("A1500"))).toBe(1500);
+    expect(engine.isPending(at("B1500"))).toBe(false);
+    expect(engine.getValue(at("B1500"))).toBe(3000);
+    expect(engine.getValue(at("E5"))).toBeNull();
+    expect(engine.isPending(at("E5"))).toBe(false);
+  });
+
+  test("계산 중에 다른 수식을 기다려야 하는 수식은 pending이고 값은 null이다", () => {
+    const engine = new FormulaEngine(bigSheet({ D1: "=C1+1" }), { background: true });
+
+    expect(engine.isPending(at("C1"))).toBe(true);
+    expect(engine.getValue(at("C1"))).toBeNull();
+    expect(engine.isPending(at("D1"))).toBe(true);
+  });
+
+  test("계산 중 순환 참조 셀은 pending이고, 끝나면 #CYCLE!이다", () => {
+    const engine = new FormulaEngine(bigSheet({ D1: "=E1", E1: "=D1" }), { background: true });
+
+    expect(engine.isPending(at("D1"))).toBe(true);
+    vi.runAllTimers();
+
+    expect(engine.getValue(at("D1"))).toEqual(new FormulaError("#CYCLE!"));
+  });
+
+  test("나눠서 계산하며 정해진 수식 셀을 여러 번에 걸쳐 알리고, 끝날 때도 알린다", () => {
+    const engine = new FormulaEngine(bigSheet(), { background: true });
+    const notified: string[][] = [];
+    engine.onChange((addresses) => notified.push(addresses.map(toA1)));
+
+    vi.runAllTimers();
+
+    expect(notified.length).toBeGreaterThan(2);
+    const all = new Set(notified.flat());
+    expect(all.has("C1")).toBe(true);
+    expect(all.has("B1")).toBe(true);
+    expect(all.has("B2000")).toBe(true);
+    expect(all.has("A1")).toBe(false);
+  });
+
+  test("계산 중에 셀을 고치면 남은 계산을 끝내고 고친 값을 반영한다", () => {
+    const sheet = bigSheet();
+    const engine = new FormulaEngine(sheet, { background: true });
+    const notified: string[][] = [];
+    engine.onChange((addresses) => notified.push(addresses.map(toA1)));
+    vi.advanceTimersToNextTimer();
+    expect(engine.calculating).toBe(true);
+    notified.length = 0;
+
+    new SetCellsCommand(sheet, [{ address: at("A1"), value: "101" }]).execute();
+
+    expect(engine.calculating).toBe(false);
+    expect(engine.getValue(at("B1"))).toBe(202);
+    expect(engine.getValue(at("C1"))).toBe(SUM_B + 200);
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toEqual(expect.arrayContaining(["A1", "B1", "C1", "B2000"]));
+  });
+
+  test("destroy하면 남은 계산을 멈추고 알리지 않는다", () => {
+    const engine = new FormulaEngine(bigSheet(), { background: true });
+    const listener = vi.fn();
+    engine.onChange(listener);
+
+    engine.destroy();
+    vi.runAllTimers();
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(engine.calculating).toBe(false);
+  });
+});
+
+// 성능 목표(README)는 `pnpm bench`로 잰다. 여기서는 결과가 맞는지와, 크게 느려지지 않았는지만 넉넉한 기준(목표의 약 10배)으로 본다.
+describe("대용량 (10만 행)", () => {
+  function timed<T>(run: () => T): { result: T; ms: number } {
+    const start = performance.now();
+    const result = run();
+    return { result, ms: performance.now() - start };
+  }
+
+  test("연결된 셀 1만 개를 다시 계산한다", () => {
+    const sheet = chainSheet(10_000);
+    const engine = new FormulaEngine(sheet);
+
+    const { ms } = timed(() => new SetCellsCommand(sheet, [{ address: at("A1"), value: "101" }]).execute());
+
+    expect(engine.getValue(at("A10000"))).toBe(10_100);
+    expect(ms).toBeLessThan(500);
+  });
+
+  test("큰 SUM이 있는 시트에서 셀 하나를 고치면 SUM이 바로 바뀐다", () => {
+    const sheet = bigSumSheet();
+    const engine = new FormulaEngine(sheet);
+    const before = engine.getValue(at("B1")) as number;
+
+    const { ms } = timed(() => new SetCellsCommand(sheet, [{ address: at("A501"), value: "1000" }]).execute());
+
+    // A501에는 원래 500 % 100 = 0이 있었다.
+    expect(engine.getValue(at("B1"))).toBe(before + 1000);
+    expect(ms).toBeLessThan(160);
+  });
+
+  test("행마다 범위 수식이 있는 10만 행 시트를 열고 고칠 수 있다", () => {
+    const sheet = scoreSheet();
+    const { result: engine, ms: openMs } = timed(() => new FormulaEngine(sheet));
+    const show = (a1: string) => formatValue(engine.getValue(at(a1)));
+
+    // 10만째 행(학생 99999): 40 + (i*37 % 61) 등
+    expect(show("G100000")).toBe(String(40 + ((99_999 * 37) % 61) + 40 + ((99_999 * 53) % 61) + 40 + ((99_999 * 71) % 61)));
+    const total = engine.getValue(at("K1")) as number;
+    expect(openMs).toBeLessThan(15_000);
+
+    const { ms } = timed(() => new SetCellsCommand(sheet, [{ address: at("D501"), value: "0" }]).execute());
+
+    const old = 40 + ((500 * 37) % 61);
+    expect(engine.getValue(at("K1"))).toBe(total - old);
+    expect(show("H501")).toBe(formatValue((0 + 40 + ((500 * 53) % 61) + 40 + ((500 * 71) % 61)) / 3));
+    expect(ms).toBeLessThan(160);
+  }, 30_000);
 });

@@ -28,6 +28,8 @@ export interface ExcelTestHandle {
     editing: EditMode | null;
     /** 틀린 수식이라 확정하지 못했다는 알림이 떠 있으면 그 글자, 아니면 null */
     problem: string | null;
+    /** 처음 열 때 수식을 나눠서 계산하는 중인지 (ADR 0024) */
+    calculating: boolean;
   };
   /** 셀("B3")에 입력된 글자. 수식이면 "=A1+1"처럼 수식 그대로. 빈 셀이면 "" */
   cell(a1: string): string;
@@ -53,7 +55,8 @@ export function Spreadsheet() {
 
   useEffect(() => {
     const sheet = createSampleSheet();
-    const engine = new FormulaEngine(sheet);
+    // 10만 행의 수식을 한 번에 계산하면 화면이 1초 넘게 멈추므로, 표를 먼저 그리고 수식은 나눠서 계산한다.
+    const engine = new FormulaEngine(sheet, { background: true });
     const view = new GridView(gridRef.current!, sheet, new History(), { engine });
     const unsubscribe = view.onSelectionChange((selection) => setActive(toA1(selection.active)));
     view.focus();
@@ -65,6 +68,7 @@ export function Spreadsheet() {
           visible: rangeToA1(view.visibleRange),
           editing: view.editMode,
           problem: view.problem,
+          calculating: engine.calculating,
         }),
         cell: (a1) => sheet.get(address(a1)),
         value: (a1) => formatValue(engine.getValue(address(a1))),

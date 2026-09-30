@@ -33,6 +33,8 @@ export const THEME = {
   headerSelectedText: "#0e5c2f",
   selectionBorder: "#107c41",
   selectionFill: "rgba(16, 124, 65, 0.12)",
+  /** 계산 중이라 아직 값을 모르는 수식 칸의 "…" */
+  pendingText: "#a0a0a0",
   problemText: "#a4262c",
   problemBackground: "#fff8f8",
   problemBorder: "#e0b4b4",
@@ -112,6 +114,10 @@ function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine, layout, vi
   ctx.textBaseline = "middle";
   for (let row = range.top; row <= range.bottom; row++) {
     for (let col = range.left; col <= range.right; col++) {
+      if (engine.isPending({ row, col })) {
+        drawPending(ctx, cellRect(layout, viewport, { row, col }));
+        continue;
+      }
       const value = engine.getValue({ row, col });
       const text = formatValue(value);
       if (text === "") continue;
@@ -129,6 +135,14 @@ function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine, layout, vi
       ctx.restore();
     }
   }
+}
+
+/** 계산 중인 수식 칸: 가운데에 회색 "…" */
+function drawPending(ctx: CanvasRenderingContext2D, rect: Rect): void {
+  ctx.fillStyle = THEME.pendingText;
+  ctx.textAlign = "center";
+  ctx.fillText("…", rect.x + rect.width / 2, rect.y + rect.height / 2);
+  ctx.fillStyle = THEME.text;
 }
 
 function drawSelectionBorder(ctx: CanvasRenderingContext2D, { layout, viewport, selection }: RenderState): void {
