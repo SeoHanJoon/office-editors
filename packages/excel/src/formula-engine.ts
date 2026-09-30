@@ -1,8 +1,9 @@
-import { cellKey, keyToAddress, type CellAddress, type CellRange } from "./address";
+import { MAX_COLS, cellKey, keyToAddress, type CellAddress, type CellRange } from "./address";
 import { evaluateFormula, rangeOf, type EvalContext } from "./formula-evaluate";
 import { lookupFunction } from "./formula-functions";
 import { FormulaSyntaxError, parseFormula, type Expr } from "./formula-parser";
 import { FormulaError, isFormula, parseLiteral, type CellValue } from "./formula-value";
+import { RangeIndex } from "./range-index";
 import type { Sheet } from "./sheet";
 
 /** 계산값이 다시 정해진 셀 주소를 받는다. */
@@ -24,6 +25,7 @@ const NAME = new FormulaError("#NAME?");
  * 시트의 입력 글자를 읽어 셀마다 계산값을 갖고 있는다. 시트가 바뀌면 필요한 수식만 다시 계산한다.
  *
  * 의존성 그래프: 수식 셀마다 참조하는 셀과 범위를 적어 두고, 거꾸로 "이 셀을 참조하는 수식" 목록도 둔다.
+ * 범위는 구간 트리(RangeIndex)에 넣어, 셀이 바뀌면 그 셀을 포함하는 범위만 바로 찾는다. (ADR 0021)
  * 셀이 바뀌면 그 셀을 참조하는 수식을 따라가며 다시 계산할 셀을 모으고, 참조되는 쪽부터 순서대로 계산한다.
  * 서로를 참조하는 수식(순환 참조)은 #CYCLE!이다. 순환에 걸린 셀을 참조만 하는 셀은 그 에러를 받아 계산한다.
  *
@@ -36,8 +38,8 @@ export class FormulaEngine {
   private readonly formulas = new Map<number, FormulaCell>();
   /** 셀 키 → 그 셀을 직접 참조하는 수식 셀 키 */
   private readonly refDependents = new Map<number, Set<number>>();
-  /** 범위를 참조하는 수식 셀 키 → 그 범위들. 바뀐 셀이 범위 안에 있는지 하나씩 확인한다. */
-  private readonly rangeDependents = new Map<number, readonly CellRange[]>();
+  /** 범위 → 그 범위를 참조하는 수식 셀 키 */
+  private readonly rangeDependents = new RangeIndex();
   private readonly listeners = new Set<FormulaChangeListener>();
   private readonly context: EvalContext;
   private readonly unsubscribe: () => void;
@@ -48,7 +50,13 @@ export class FormulaEngine {
       value: (address) => this.getValue(address),
       rangeValues: (range) => this.rangeValues(range),
     };
-    this.update([...sheet.entries()].map(([address]) => cellKey(address)));
+    const keys: number[] = [];
+    for (const [address, input] of sheet.entries()) {
+      const key = cellKey(address);
+      this.setInput(key, input);
+      keys.push(key);
+    }
+    this.recalculateFrom(keys);
     this.unsubscribe = sheet.onChange((addresses) => {
       const recalculated = this.update(addresses.map(cellKey));
       const changed = recalculated.map(keyToAddress);
@@ -78,8 +86,13 @@ export class FormulaEngine {
 
   /** 바뀐 셀을 반영하고 다시 계산한다. 계산값이 다시 정해진 셀 키를 돌려준다. */
   private update(keys: readonly number[]): number[] {
+    for (const key of keys) this.setInput(key, this.sheet.get(keyToAddress(key)));
+    return this.recalculateFrom(keys);
+  }
+
+  /** 입력이 이미 반영된 changed 셀에서 이어지는 수식을 다시 계산한다. 계산값이 다시 정해진 셀 키를 돌려준다. */
+  private recalculateFrom(keys: readonly number[]): number[] {
     const changed = new Set(keys);
-    for (const key of changed) this.setInput(key, this.sheet.get(keyToAddress(key)));
     const { dirty, dependents } = this.collectDirty(changed);
     this.recalculate(dirty, dependents);
     for (const key of dirty) changed.add(key);
@@ -115,7 +128,7 @@ export class FormulaEngine {
       if (!dependents) this.refDependents.set(ref, (dependents = new Set()));
       dependents.add(key);
     }
-    if (ranges.length > 0) this.rangeDependents.set(key, ranges);
+    if (ranges.length > 0) this.rangeDependents.add(key, ranges);
   }
 
   private removeFormula(key: number): void {
@@ -127,24 +140,25 @@ export class FormulaEngine {
       dependents?.delete(key);
       if (dependents?.size === 0) this.refDependents.delete(ref);
     }
-    this.rangeDependents.delete(key);
+    if (formula.ranges.length > 0) this.rangeDependents.remove(key);
   }
 
   /** key 셀을 참조하는 수식 셀 키 (중복 없음) */
   private dependentsOf(key: number): number[] {
-    const result = new Set(this.refDependents.get(key));
-    if (this.rangeDependents.size > 0) {
-      const { row, col } = keyToAddress(key);
-      for (const [formula, ranges] of this.rangeDependents) {
-        if (ranges.some((r) => row >= r.top && row <= r.bottom && col >= r.left && col <= r.right)) result.add(formula);
-      }
-    }
-    return [...result];
+    const direct = this.refDependents.get(key);
+    const result = direct ? [...direct] : [];
+    const { row, col } = keyToAddress(key);
+    this.rangeDependents.forEachContaining(row, col, (formula) => result.push(formula));
+    // 같은 수식이 셀과 범위로 함께 참조하거나(=A1+SUM(A1:A3)) 겹치는 범위로 두 번 참조할 수 있다.
+    return result.length > 1 ? [...new Set(result)] : result;
   }
 
   /**
    * 다시 계산할 수식 셀(dirty)을 모은다: 바뀐 수식 셀과, 바뀐 셀을 따라 참조하는 수식 셀 모두.
    * dependents에는 dirty 셀마다 그 셀을 참조하는 수식 셀을 담는다. (이것도 모두 dirty)
+   *
+   * 바뀐 수식 셀부터 따라간 뒤 바뀐 값 셀을 따라간다. 수식이 모두 dirty가 되면 남은 값 셀은 더 볼 필요가 없다.
+   * 시트를 처음 읽을 때는 모든 수식이 바뀐 셀이라 값 셀 수십만 개를 하나도 따라가지 않는다.
    */
   private collectDirty(changed: ReadonlySet<number>): { dirty: Set<number>; dependents: Map<number, number[]> } {
     const dirty = new Set<number>();
@@ -159,14 +173,23 @@ export class FormulaEngine {
         queue.push(formula);
       }
     };
+    let next = 0;
+    const drain = () => {
+      while (next < queue.length) visit(queue[next++]!);
+    };
     for (const key of changed) {
-      if (!this.formulas.has(key)) visit(key);
-      else if (!dirty.has(key)) {
+      if (this.formulas.has(key) && !dirty.has(key)) {
         dirty.add(key);
         queue.push(key);
       }
     }
-    for (let i = 0; i < queue.length; i++) visit(queue[i]!);
+    drain();
+    for (const key of changed) {
+      if (dirty.size === this.formulas.size) break;
+      if (this.formulas.has(key)) continue;
+      visit(key);
+      drain();
+    }
     return { dirty, dependents };
   }
 
@@ -218,13 +241,21 @@ export class FormulaEngine {
     return expr ? evaluateFormula(expr, this.context, lookupFunction) : NAME;
   }
 
-  /** 범위 안 셀 값. 시트 밖 부분은 건너뛴다. */
-  private *rangeValues(range: CellRange): Generator<CellValue> {
+  /**
+   * 범위 안 셀 값. 시트 밖 부분은 건너뛴다.
+   * 큰 범위(10만 칸)를 빨리 읽도록 제너레이터 대신 배열로 한 번에 만들고, 칸마다 주소 객체를 만들지 않게 키를 바로 셈한다.
+   */
+  private rangeValues(range: CellRange): CellValue[] {
     const bottom = Math.min(range.bottom, this.sheet.rowCount - 1);
     const right = Math.min(range.right, this.sheet.colCount - 1);
+    const values = this.values;
+    const stride = MAX_COLS;
+    const result: CellValue[] = [];
     for (let row = range.top; row <= bottom; row++) {
-      for (let col = range.left; col <= right; col++) yield this.values.get(cellKey({ row, col })) ?? null;
+      const rowKey = row * stride;
+      for (let col = range.left; col <= right; col++) result.push(values.get(rowKey + col) ?? null);
     }
+    return result;
   }
 }
 
