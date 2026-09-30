@@ -34,7 +34,7 @@ Step 6 완료 기준은 "실제 Excel과 복붙 호환"이다. Excel과는 클�
 - 붙여넣기는 모두 `SetCellsCommand` 하나라서 undo 한 번에 되돌아간다. (ADR 0015)
 - 붙일 범위가 시트 밖으로 넘치면 아무것도 하지 않는다. Excel은 알림을 띄운다.
 - 입력창의 `copy`·`cut`·`paste` 이벤트로 받는다. 이 방식은 권한 요청이 필요 없다. 셀 입력 중에는 브라우저 기본 동작(글자 복사·붙여넣기)에 맡긴다.
-- 코드는 `clipboard.ts`(순수 함수)와 `GridView`에 있다.
+- 코드는 `clipboard.ts`(순수 함수)와 `GridView`에 있다. 브라우저 테스트용 `window.__excel.state()`에 `copied`(점선 범위, 없으면 null)를 더했다. (ADR 0010)
 
 ## 결과
 - Excel 클립보드 형식은 공식 문서가 없어서 경험적으로 알려진 동작을 따랐다. 아래 두 가지는 실제 Excel에서 확인이 필요하다.
