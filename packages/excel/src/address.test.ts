@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MAX_COLS, MAX_ROWS, columnName, parseA1, rangeToA1, toA1 } from "./address";
+import { MAX_COLS, MAX_ROWS, cellKey, columnName, keyToAddress, parseA1, rangeToA1, toA1 } from "./address";
 
 describe("열 이름", () => {
   test("0부터 25까지는 A부터 Z까지 한 글자다", () => {
@@ -56,5 +56,17 @@ describe("범위 주소", () => {
 
   test("셀 하나면 주소 하나만 쓴다", () => {
     expect(rangeToA1({ top: 4, left: 1, bottom: 4, right: 1 })).toBe("B5");
+  });
+});
+
+describe("셀 숫자 키", () => {
+  test("키를 주소로 되돌리면 처음 주소와 같다", () => {
+    for (const address of [
+      { row: 0, col: 0 },
+      { row: 3, col: 7 },
+      { row: MAX_ROWS - 1, col: MAX_COLS - 1 },
+    ]) {
+      expect(keyToAddress(cellKey(address))).toEqual(address);
+    }
   });
 });
