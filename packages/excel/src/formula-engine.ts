@@ -88,7 +88,7 @@ export class FormulaEngine {
   constructor(sheet: Sheet, { background = false }: FormulaEngineOptions = {}) {
     this.sheet = sheet;
     this.context = {
-      value: (address) => this.getValue(address),
+      value: (address) => this.read(cellKey(address), address, true),
       rangeValues: (range) => this.rangeValues(range),
     };
     this.unsubscribe = sheet.onChange(this.onSheetChange);
@@ -107,18 +107,17 @@ export class FormulaEngine {
 
   /** 셀의 계산값. 빈 셀이면 null. 계산 중이라 아직 알 수 없는 수식 셀도 null이다. (isPending으로 구분) */
   getValue(address: CellAddress): CellValue {
-    const key = cellKey(address);
-    const value = this.values.get(key);
-    if (value !== undefined) return value;
-    const peeked = this.peek(key, address);
-    return peeked === PENDING ? null : peeked;
+    // 화면이 스크롤하며 읽는 값 셀은 기억하지 않는다. 큰 values에 새 칸이 늘다가 한꺼번에 자리를 옮기면 프레임이 밀린다.
+    return this.read(cellKey(address), address, false);
   }
 
   /** 계산 중이라 아직 값을 알 수 없는 수식 셀인지. 계산 중이 아니면 늘 false */
   isPending(address: CellAddress): boolean {
     if (!this.loading) return false;
     const key = cellKey(address);
-    return !this.values.has(key) && this.peek(key, address) === PENDING;
+    if (this.values.has(key)) return false;
+    const input = this.sheet.get(address);
+    return isFormula(input) && this.peekFormula(key, input) === PENDING;
   }
 
   /**
@@ -350,19 +349,30 @@ export class FormulaEngine {
   }
 
   /**
-   * values에 아직 없는 셀의 값을 알아본다.
-   * 값 셀은 입력을 해석해 values에 넣어 둔다. 빈 셀은 null이다.
-   * 수식 셀은 처음 계산 중에만 여기 온다. 참조하는 셀이 모두 정해져 있으면 지금 계산해 두고, 아니면 PENDING이다.
-   * 참조하는 수식을 따라 더 들어가지 않으므로 오래 걸리지 않고, 순환에 걸린 셀은 늘 PENDING이다.
+   * 셀 값을 읽는다. values에 없으면 입력을 본다.
+   * 값 셀은 입력을 해석하고, remember면 values에 넣어 둔다. (수식이 읽을 때. 큰 범위를 다시 더할 때 해석을 되풀이하지 않게)
+   * 수식 셀이 values에 없는 것은 처음 계산 중일 때뿐이다. 지금 계산할 수 없으면 null이다.
    */
-  private peek(key: number, address: CellAddress): CellValue | typeof PENDING {
+  private read(key: number, address: CellAddress, remember: boolean): CellValue {
+    const value = this.values.get(key);
+    if (value !== undefined) return value;
     const input = this.sheet.get(address);
     if (input === "") return null;
     if (!isFormula(input)) {
-      const value = parseLiteral(input);
-      this.values.set(key, value);
-      return value;
+      const literal = parseLiteral(input);
+      if (remember) this.values.set(key, literal);
+      return literal;
     }
+    const peeked = this.peekFormula(key, input);
+    return peeked === PENDING ? null : peeked;
+  }
+
+  /**
+   * 처음 계산 중에 아직 계산 안 된 수식 셀을 알아본다.
+   * 참조하는 셀이 모두 정해져 있으면 지금 계산해 두고, 아니면 PENDING이다.
+   * 참조하는 수식을 따라 더 들어가지 않으므로 오래 걸리지 않고, 순환에 걸린 셀은 늘 PENDING이다.
+   */
+  private peekFormula(key: number, input: string): CellValue | typeof PENDING {
     const formula = this.formulas.get(key) ?? parseCell(input);
     if (!formula.refs.every((ref) => this.settled(ref)) || !formula.ranges.every((range) => this.rangeSettled(range))) {
       return PENDING;
@@ -401,7 +411,7 @@ export class FormulaEngine {
       const rowKey = row * STRIDE;
       for (let col = range.left; col <= right; col++) {
         const value = values.get(rowKey + col);
-        result.push(value !== undefined ? value : this.getValue({ row, col }));
+        result.push(value !== undefined ? value : this.read(rowKey + col, { row, col }, true));
       }
     }
     return result;
