@@ -30,6 +30,8 @@ async function clickCell(page: Page, a1: string, { shift = false } = {}) {
 test.beforeEach(async ({ page }) => {
   await page.goto("/excel");
   await page.waitForFunction(() => window.__excel !== undefined);
+  // 처음 열 때 수식을 나눠서 계산한다. 결과를 확인하는 테스트가 흔들리지 않도록 끝날 때까지 기다린다.
+  await page.waitForFunction(() => !window.__excel!.state().calculating);
   await expect(nameBox(page)).toHaveValue("A1");
 });
 
@@ -56,6 +58,31 @@ test("10만 행 표를 휠로 끝까지 내리고 마지막 행을 클릭하면 
   await page.mouse.click(box.x + HEADER_WIDTH + COL_WIDTH * 1.5, box.y + clientHeight - ROW_HEIGHT / 2);
 
   await expect(nameBox(page)).toHaveValue("B100000");
+});
+
+test("처음 열면 표가 먼저 보이고, 수식은 나눠서 계산한 뒤 총점 합계가 채워진다", async ({ page }) => {
+  await page.reload();
+  await page.waitForFunction(() => window.__excel !== undefined);
+
+  // 표가 뜬 직후에는 아직 계산 중이다. 보이는 행의 총점(G2 = D2+E2+F2)은 바로 계산되고,
+  // 총점 10만 개를 모두 더하는 K1은 계산이 끝날 때까지 비어 있다. (화면에는 회색 "…")
+  const first = await page.evaluate(() => ({
+    calculating: window.__excel!.state().calculating,
+    scores: ["D2", "E2", "F2"].map((a1) => Number(window.__excel!.value(a1))),
+    total: window.__excel!.value("G2"),
+    sum: window.__excel!.value("K1"),
+  }));
+  expect(first.calculating).toBe(true);
+  expect(first.total).toBe(String(first.scores[0]! + first.scores[1]! + first.scores[2]!));
+  expect(first.sum).toBe("");
+
+  await page.waitForFunction(() => !window.__excel!.state().calculating);
+  const expected = await page.evaluate(() => {
+    let total = 0;
+    for (let row = 2; row <= 100_000; row++) total += Number(window.__excel!.value(`G${row}`));
+    return String(total);
+  });
+  expect(await page.evaluate(() => window.__excel!.value("K1"))).toBe(expected);
 });
 
 test("셀을 클릭하면 그 셀이 선택된다", async ({ page }) => {

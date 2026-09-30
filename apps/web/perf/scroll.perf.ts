@@ -24,11 +24,18 @@ const SCENARIOS: Scenario[] = [
 /** 측정할 프레임 수 (약 5초) */
 const FRAMES = 300;
 
-async function openSheet(page: Page): Promise<number> {
-  const start = Date.now();
+/**
+ * /excel을 열고 두 시각을 잰다. (페이지 이동을 시작한 때부터 ms)
+ * - 첫 화면: 표와 보이는 셀이 처음 그려진 때. GridView는 만들 때 바로 그리고, 그 직후 window.__excel이 생긴다.
+ * - 계산 완료: 나눠서 하는 수식 계산(ADR 0024)이 끝난 때
+ */
+async function openSheet(page: Page): Promise<{ firstScreen: number; calculated: number }> {
   await page.goto("/excel");
-  await page.waitForFunction(() => window.__excel !== undefined, null, { timeout: 60_000 });
-  return Date.now() - start;
+  await page.waitForFunction(() => window.__excel !== undefined, null, { timeout: 60_000, polling: 10 });
+  const firstScreen = await page.evaluate(() => performance.now());
+  await page.waitForFunction(() => !window.__excel!.state().calculating, null, { timeout: 60_000, polling: 10 });
+  const calculated = await page.evaluate(() => performance.now());
+  return { firstScreen, calculated };
 }
 
 /**
@@ -68,9 +75,13 @@ function percentile(sorted: readonly number[], p: number): number {
 const ms = (value: number) => value.toFixed(1);
 
 test("페이지 열기 (10만 행 시트 + 수식 20만 개)", async ({ page }) => {
-  const times: number[] = [];
-  for (let i = 0; i < 3; i++) times.push(await openSheet(page));
-  console.log(`\n페이지 열기: ${times.map((t) => `${t}ms`).join(", ")}`);
+  const rows: Record<string, string>[] = [];
+  for (let i = 0; i < 3; i++) {
+    const { firstScreen, calculated } = await openSheet(page);
+    rows.push({ "첫 화면(ms)": ms(firstScreen), "계산 완료(ms)": ms(calculated) });
+  }
+  console.log("\n페이지 열기 (페이지 이동 시작부터)");
+  console.table(rows);
 });
 
 test("① 프레임 간격", async ({ page }) => {
