@@ -1,0 +1,23 @@
+{
+  "name": "office-editors",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=24.21"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "e2e": "pnpm --filter @office/web e2e",
+    "e2e:record": "pnpm --filter @office/web e2e:record"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "turbo": "^2.11.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
