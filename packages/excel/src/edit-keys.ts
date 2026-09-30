@@ -32,6 +32,12 @@ export type EditAction =
   | "insertLines"
   /** 고른 행·열 전체를 지운다. (Ctrl+-) */
   | "deleteLines"
+  /** 시트 전체를 고른다. (Ctrl/Cmd+A) */
+  | "selectAll"
+  /** 고른 범위가 걸친 행 전체를 고른다. (Shift+Space) */
+  | "selectRows"
+  /** 고른 범위가 걸친 열 전체를 고른다. (Ctrl+Space, Mac에서 한/영 전환과 겹칠 때 쓰는 ⌥Space) */
+  | "selectColumns"
   | "block";
 
 /**
@@ -47,9 +53,16 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
     if (mod && !input.altKey) {
       if (isLetter(input, "z")) return input.shiftKey ? "redo" : "undo";
       if (isLetter(input, "y") && !input.shiftKey) return "redo";
+      if (isLetter(input, "a") && !input.shiftKey) return "selectAll";
       // 자판마다 Shift+=의 key가 다를 수 있어서 자판 위치(code)도 본다.
       if (input.key === "+" || (input.shiftKey && input.code === "Equal") || input.code === "NumpadAdd") return "insertLines";
       if (!input.shiftKey && (input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract")) return "deleteLines";
+    }
+    if (isSpace(input)) {
+      // Cmd+Space는 Spotlight라 받지 않는다. Mac의 ⌥Space는 key가 줄바꿈 없는 공백(U+00A0)으로 온다.
+      const { shiftKey, ctrlKey, metaKey, altKey } = input;
+      if (shiftKey && !ctrlKey && !metaKey && !altKey) return "selectRows";
+      if (!shiftKey && !metaKey && ctrlKey !== altKey) return "selectColumns";
     }
     if (plain && input.key === "Delete") return "clear";
     if (plain && input.key === "Backspace") return "clearAndEnter";
@@ -86,4 +99,8 @@ function isLetter(input: KeyInput, letter: string): boolean {
   const key = input.key.toLowerCase();
   if (/^[a-z]$/.test(key)) return key === letter;
   return input.code === `Key${letter.toUpperCase()}`;
+}
+
+function isSpace(input: KeyInput): boolean {
+  return input.code === "Space" || input.key === " " || input.key === "\u00a0";
 }

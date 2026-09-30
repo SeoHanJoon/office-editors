@@ -655,3 +655,52 @@ test.describe("행·열 삽입/삭제", () => {
     expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
   });
 });
+
+test.describe("전체 선택과 줄 선택", () => {
+  test("왼쪽 위 모서리를 누르거나 Ctrl/Cmd+A를 누르면 시트 전체를 고르고, 활성 셀은 그대로다", async ({ page }) => {
+    await clickCell(page, "C5");
+    const box = (await grid(page).boundingBox())!;
+    await page.mouse.click(box.x + HEADER_WIDTH / 2, box.y + HEADER_HEIGHT / 2);
+    expect((await state(page)).selection).toBe("A1:AX100000");
+    await expect(nameBox(page)).toHaveValue("C5");
+
+    await clickCell(page, "B2");
+    await page.keyboard.press("ControlOrMeta+a");
+    expect((await state(page)).selection).toBe("A1:AX100000");
+    await expect(nameBox(page)).toHaveValue("B2");
+  });
+
+  test("Shift+Space는 고른 범위가 걸친 행 전체를, Ctrl+Space와 ⌥Space는 열 전체를 고른다", async ({ page }) => {
+    await clickCell(page, "B3");
+    await clickCell(page, "C4", { shift: true });
+
+    await page.keyboard.press("Shift+Space");
+    expect((await state(page)).selection).toBe("A3:AX4");
+    await expect(nameBox(page)).toHaveValue("B3");
+    // 공백이 입력되어 입력이 시작되지 않는다.
+    expect((await state(page)).editing).toBeNull();
+
+    // 이어서 Shift+방향키를 누르면 줄 단위로 늘어난다.
+    await page.keyboard.press("Shift+ArrowDown");
+    expect((await state(page)).selection).toBe("A3:AX5");
+    // 행 끝 열(AX)로 가로 스크롤하지 않는다.
+    expect((await state(page)).visible).toMatch(/^A1:/);
+
+    await clickCell(page, "B3");
+    await clickCell(page, "C3", { shift: true });
+    await page.keyboard.press("Control+Space");
+    expect((await state(page)).selection).toBe("B1:C100000");
+
+    await clickCell(page, "D2");
+    await page.keyboard.press("Alt+Space");
+    expect((await state(page)).selection).toBe("D1:D100000");
+    expect((await state(page)).editing).toBeNull();
+  });
+
+  test("Shift+Space로 고른 행은 Ctrl+-로 지울 수 있다", async ({ page }) => {
+    await clickCell(page, "C3");
+    await page.keyboard.press("Shift+Space");
+    await page.keyboard.press("ControlOrMeta+Minus");
+    expect((await state(page)).rowCount).toBe(99_999);
+  });
+});

@@ -29,8 +29,11 @@ import {
 import { drawGrid } from "./render";
 import {
   clampSelection,
+  expandToLines,
   extendTo,
+  focusToReveal,
   sameSelection,
+  selectAll,
   selectCell,
   selectColumns,
   selectRange,
@@ -77,7 +80,7 @@ function sameClipboardText(a: string, b: string): boolean {
  * 셀 값은 모두 SetCellsCommand로 history에 넣어 바꾼다. undo/redo로 값이 바뀌면 그 셀들을 선택한다.
  * 셀에는 engine의 계산값을 그리고(계산 중인 칸은 회색 "…"), 입력창에는 입력한 글자(수식)를 그대로 보여준다.
  *
- * 행·열 머리글을 누르면 줄 전체를 고르고, Ctrl+Shift+= / Ctrl+-로 고른 행·열을 넣고 지운다. (StructureCommand)
+ * 행·열 머리글을 누르면 줄 전체를, 왼쪽 위 모서리를 누르면 시트 전체를 고른다. Ctrl+Shift+= / Ctrl+-로 고른 행·열을 넣고 지운다. (StructureCommand)
  *
  * 복사/잘라내기/붙여넣기는 입력창의 copy·cut·paste 이벤트로 받는다. 클립보드에는 Excel과 같은 text/plain(보이는 값)을 넣고,
  * 복사한 범위를 기억해 두었다가 붙여넣을 글자가 그때 넣은 글자와 같으면 수식째 붙인다. (Excel과 같은 방식)
@@ -215,9 +218,13 @@ export class GridView {
     };
   }
 
-  /** 선택을 바꾸고, reveal 셀이 보이게 스크롤한 뒤 다시 그린다. ("none"이면 스크롤하지 않는다) */
+  /**
+   * 선택을 바꾸고, reveal 셀이 보이게 스크롤한 뒤 다시 그린다. ("none"이면 스크롤하지 않는다)
+   * "focus"는 줄 전체를 고른 채 늘릴 때 그 줄 방향으로는 스크롤하지 않는다. (focusToReveal)
+   */
   private select(selection: Selection, reveal: "active" | "focus" | "none"): void {
-    if (reveal !== "none") this.reveal(selection[reveal]);
+    if (reveal === "active") this.reveal(selection.active);
+    else if (reveal === "focus") this.reveal(focusToReveal(selection, this.sheet));
     if (sameSelection(selection, this.currentSelection)) return;
     this.currentSelection = selection;
     // 한글 조합 창이 새 활성 셀 옆에 뜨도록 입력창은 다음 프레임을 기다리지 않고 옮긴다.
@@ -464,6 +471,15 @@ export class GridView {
         event.preventDefault(); // 브라우저 확대·축소 단축키와 겹친다.
         this.changeLines(action === "insertLines" ? "insert" : "delete");
         return;
+      case "selectAll":
+        event.preventDefault();
+        this.select(selectAll(this.currentSelection, this.sheet), "none");
+        return;
+      case "selectRows":
+      case "selectColumns":
+        event.preventDefault(); // 입력창에 공백이 들어가 입력이 시작되지 않게
+        this.select(expandToLines(this.currentSelection, action === "selectRows" ? "row" : "col", this.sheet), "none");
+        return;
       case "cancel":
         event.preventDefault();
         if (this.editor.mode) this.editor.stop();
@@ -525,8 +541,11 @@ export class GridView {
       this.dragKind = header.axis;
       this.selectLines(from, header.index);
     } else {
-      // 왼쪽 위 모서리(시트 전체 선택)는 아직 없다.
-      if (isInHeader(this.layout, point.x, point.y)) return;
+      if (isInHeader(this.layout, point.x, point.y)) {
+        // 왼쪽 위 모서리를 누르면 시트 전체를 고른다.
+        this.select(selectAll(this.currentSelection, this.sheet), "none");
+        return;
+      }
       const cell = pointToCell(this.layout, this.viewport(), this.sheet, point.x, point.y);
       this.dragKind = "cell";
       if (event.shiftKey) this.select(extendTo(this.currentSelection, cell), "focus");
