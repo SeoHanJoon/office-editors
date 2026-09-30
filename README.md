@@ -75,7 +75,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | **4** ✅ | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | [0017](adr/0017-formula-engine.md), [0018](adr/0018-dependency-graph-and-cycles.md), [0019](adr/0019-reject-invalid-formula.md), [0020](adr/0020-grid-view-engine.md) |
 | **5** ✅ | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | [0021](adr/0021-range-index-interval-tree.md), [0022](adr/0022-performance-measurement.md), [0023](adr/0023-large-sample-sheet.md), [0024](adr/0024-background-first-calculation.md) |
 | **6** ✅ | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | [0025](adr/0025-clipboard.md), [0026](adr/0026-insert-delete-rows-columns.md), [0027](adr/0027-formula-reference-rewrite.md), [0028](adr/0028-engine-structure-shift.md) |
-| **7** | Excel | 오른쪽 클릭 메뉴 (행·열 머리글, 셀) + 전체 선택·줄 선택 단축키 | 아래 "Step 7 범위"의 동작을 메뉴로 할 수 있고, 각 동작이 undo 한 번에 되돌아감 | [0029](adr/0029-context-menu.md), [0030](adr/0030-select-all-and-line-shortcuts.md) |
+| **7** ✅ | Excel | 오른쪽 클릭 메뉴 (행·열 머리글, 셀) + 전체 선택·줄 선택 단축키 | 아래 "Step 7 범위"의 동작을 메뉴로 할 수 있고, 각 동작이 undo 한 번에 되돌아감 | [0029](adr/0029-context-menu.md), [0030](adr/0030-select-all-and-line-shortcuts.md) |
 | **8** | Excel | 열 너비·행 높이 조절 + 셀 안 줄바꿈과 행 높이 자동 맞춤 | 아래 "Step 8 범위"가 동작하고, Step 5 성능 목표를 계속 지킴 | 예정 |
 | **9** | Excel | 채우기 핸들 (선택 모서리를 끌어 값 이어 채우기) | 아래 "Step 9 범위"가 동작하고, undo 한 번에 되돌아감 | [0029](adr/0029-context-menu.md), [0030](adr/0030-select-all-and-line-shortcuts.md) |
 | **10** | Excel | 상단 툴바 + 수식 입력줄 + 셀 서식 | 아래 "Step 10 범위"가 동작하고, 서식이 복사·붙여넣기·undo를 따라감 | 예정 |
