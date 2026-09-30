@@ -6,6 +6,8 @@ import { FormulaError, formatValue } from "./formula-value";
 import { bigSumSheet, chainSheet, scoreSheet } from "./perf-sheets";
 import { SetCellsCommand } from "./set-cells-command";
 import { Sheet } from "./sheet";
+import type { StructureChange } from "./structure";
+import { StructureCommand } from "./structure-command";
 
 const at = (a1: string) => parseA1(a1)!;
 
@@ -381,6 +383,155 @@ describe("나눠서 계산 (background)", () => {
 });
 
 // 성능 목표(README)는 `pnpm bench`로 잰다. 여기서는 결과가 맞는지와, 크게 느려지지 않았는지만 넉넉한 기준(목표의 약 10배)으로 본다.
+describe("행·열 삽입/삭제", () => {
+  const insertRows = (row: number, count = 1): StructureChange => ({ kind: "insert", axis: "row", index: row - 1, count });
+  const deleteRows = (row: number, count = 1): StructureChange => ({ kind: "delete", axis: "row", index: row - 1, count });
+  const deleteCols = (col: number, count = 1): StructureChange => ({ kind: "delete", axis: "col", index: col, count });
+
+  /** 새로 만든 엔진의 값과 모든 칸을 비교한다. (옮기고 일부만 다시 계산한 결과가 처음부터 계산한 결과와 같은지) */
+  function expectSameAsFresh(sheet: Sheet, engine: FormulaEngine) {
+    const fresh = new FormulaEngine(sheet);
+    for (let row = 0; row < sheet.rowCount; row++) {
+      for (let col = 0; col < sheet.colCount; col++) {
+        const address = { row, col };
+        expect(formatValue(engine.getValue(address)), toA1(address)).toBe(formatValue(fresh.getValue(address)));
+      }
+    }
+    fresh.destroy();
+  }
+
+  test("행을 넣어도 수식 결과가 그대로 따라간다", () => {
+    const { sheet, engine, history, show } = setup({ A1: "1", A2: "2", A3: "=A1+A2", B1: "=SUM(A1:A3)" });
+    history.execute(new StructureCommand(sheet, insertRows(2)));
+
+    expect(show("A4")).toBe("3");
+    expect(show("B1")).toBe("6");
+    expectSameAsFresh(sheet, engine);
+  });
+
+  test("지운 셀을 참조하던 수식은 #REF!, 범위는 줄어든 만큼 다시 계산한다", () => {
+    const { sheet, engine, history, show } = setup({ A1: "1", A2: "2", A3: "3", B1: "=A2*10", B4: "=SUM(A1:A3)", C1: "=B1+1" });
+    history.execute(new StructureCommand(sheet, deleteRows(2)));
+
+    expect(show("B1")).toBe("#REF!");
+    expect(show("C1")).toBe("#REF!");
+    expect(sheet.get(at("B3"))).toBe("=SUM(A1:A2)");
+    expect(show("B3")).toBe("4");
+    expectSameAsFresh(sheet, engine);
+  });
+
+  test("범위 일부를 지우면 합계가 줄어든다", () => {
+    const { sheet, engine, history, show } = setup({ A1: "1", A2: "2", A3: "3", C1: "=SUM(A1:A3)" });
+    history.execute(new StructureCommand(sheet, deleteRows(2)));
+
+    expect(sheet.get(at("C1"))).toBe("=SUM(A1:A2)");
+    expect(show("C1")).toBe("4");
+    expectSameAsFresh(sheet, engine);
+  });
+
+  test("밀리기만 한 수식은 다시 계산하지 않는다", () => {
+    const { sheet, history, notified } = setup({ A1: "1", A2: "=A1+1", A3: "=A2+1", B5: "=SUM(A1:A3)" });
+    history.execute(new StructureCommand(sheet, insertRows(1)));
+
+    expect(notified).toEqual([[]]);
+  });
+
+  test("범위 안쪽에 넣으면 그 범위 수식만 다시 계산한다", () => {
+    const { sheet, history, notified } = setup({ A1: "1", A2: "=A1+1", A3: "=A2+1", B5: "=SUM(A1:A3)", C5: "=B5" });
+    history.execute(new StructureCommand(sheet, insertRows(2)));
+
+    expect(notified).toEqual([["B6", "C6"]]);
+  });
+
+  test("undo와 redo를 해도 처음부터 계산한 결과와 같다", () => {
+    const { sheet, engine, history, show } = setup({ A1: "1", A2: "2", A3: "3", B1: "=A2*10", B2: "=SUM(A1:A3)", C1: "=B1+B2" });
+    history.execute(new StructureCommand(sheet, deleteRows(1, 2)));
+    history.undo();
+    expect(show("C1")).toBe("26");
+    expectSameAsFresh(sheet, engine);
+    history.redo();
+    expectSameAsFresh(sheet, engine);
+  });
+
+  test("열을 지워도 순환 참조를 다시 찾는다", () => {
+    const { sheet, engine, history, show } = setup({ A1: "=C1", B1: "5", C1: "=A1+B1" });
+    expect(show("A1")).toBe("#CYCLE!");
+    history.execute(new StructureCommand(sheet, deleteCols(1)));
+
+    expect(sheet.get(at("B1"))).toBe("=A1+#REF!");
+    expect(show("A1")).toBe("#CYCLE!");
+    expectSameAsFresh(sheet, engine);
+  });
+
+  test("무작위로 넣고 지우고 되돌려도 처음부터 계산한 결과와 같다", () => {
+    let seed = 2024;
+    const random = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % n;
+    };
+    const ref = () => `${"ABCDEF"[random(6)]}${1 + random(12)}`;
+    const cells: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) {
+      const kind = random(4);
+      const range = () => {
+        const a = ref();
+        return `${a}:${ref()}`;
+      };
+      cells[ref()] =
+        kind === 0 ? String(random(100)) : kind === 1 ? `=${ref()}+${ref()}` : kind === 2 ? `=SUM(${range()})` : `=COUNT(${range()},${ref()})`;
+    }
+    const sheet = new Sheet({ rowCount: 12, colCount: 6 });
+    sheet.setCells(Object.entries(cells).map(([a1, value]) => ({ address: at(a1), value })));
+    const engine = new FormulaEngine(sheet);
+    const history = new History();
+
+    for (let step = 0; step < 60; step++) {
+      const action = random(5);
+      if (action === 0 && history.canUndo) history.undo();
+      else if (action === 1 && history.canRedo) history.redo();
+      else {
+        const axis = random(2) === 0 ? "row" : "col";
+        const size = axis === "row" ? sheet.rowCount : sheet.colCount;
+        const kind = random(2) === 0 || size < 3 ? "insert" : "delete";
+        const index = random(kind === "insert" ? size + 1 : size - 1);
+        const count = 1 + random(kind === "insert" ? 3 : Math.min(3, size - index - 1));
+        history.execute(new StructureCommand(sheet, { kind, axis, index, count }));
+      }
+      expectSameAsFresh(sheet, engine);
+    }
+  });
+
+  test("나눠서 계산하는 중에 행을 넣으면 새 시트로 처음 계산을 다시 나눠서 한다", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // 시계를 부를 때마다 5ms씩 가게 해서, 한 번에 조금씩만 계산하게 한다.
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 5));
+    try {
+      const sheet = new Sheet({ rowCount: 3000, colCount: 3 });
+      const changes = [];
+      for (let row = 0; row < 3000; row++) {
+        changes.push({ address: { row, col: 0 }, value: String(row) });
+        changes.push({ address: { row, col: 1 }, value: `=A${row + 1}*2` });
+      }
+      changes.push({ address: at("C1"), value: "=SUM(B1:B3000)" });
+      sheet.setCells(changes);
+      const engine = new FormulaEngine(sheet, { background: true });
+      expect(engine.calculating).toBe(true);
+
+      vi.advanceTimersToNextTimer();
+      new StructureCommand(sheet, insertRows(1)).execute();
+      expect(engine.calculating).toBe(true);
+      vi.runAllTimers();
+      expect(engine.calculating).toBe(false);
+      expect(engine.getValue(at("C2"))).toBe(2999 * 3000);
+      expectSameAsFresh(sheet, engine);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("대용량 (10만 행)", () => {
   function timed<T>(run: () => T): { result: T; ms: number } {
     const start = performance.now();

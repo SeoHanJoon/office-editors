@@ -13,12 +13,21 @@ export interface ReferenceMapping {
   range(start: CellRef, end: CellRef): readonly [CellRef, CellRef] | null;
 }
 
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const nameOf = columnName;
+const split = tokenize;
+const bounds = rangeOf;
+const lineAfter = mapLine;
+const spanAfter = mapSpan;
+const ROW_LIMIT = MAX_ROWS;
+const COL_LIMIT = MAX_COLS;
+
 const REF_ERROR = "#REF!";
 const REF_EXPR: Expr = { kind: "error", code: "#REF!" };
 
 /** 참조를 수식 글자로 쓴다. ($A$1, A$1, $A1, A1) */
 export function formatRef({ row, col, rowAbsolute, colAbsolute }: CellRef): string {
-  return `${colAbsolute ? "$" : ""}${columnName(col)}${rowAbsolute ? "$" : ""}${row + 1}`;
+  return `${colAbsolute ? "$" : ""}${nameOf(col)}${rowAbsolute ? "$" : ""}${row + 1}`;
 }
 
 /**
@@ -29,7 +38,7 @@ export function rewriteFormula(input: string, mapping: ReferenceMapping): string
   if (!input.startsWith("=")) return input;
   let tokens;
   try {
-    tokens = tokenize(input);
+    tokens = split(input);
   } catch (error) {
     if (error instanceof FormulaSyntaxError) return input;
     throw error;
@@ -100,7 +109,7 @@ export function mapExpr(expr: Expr, mapping: ReferenceMapping): Expr {
 }
 
 function inSheet(row: number, col: number): boolean {
-  return row >= 0 && col >= 0 && row < MAX_ROWS && col < MAX_COLS;
+  return row >= 0 && col >= 0 && row < ROW_LIMIT && col < COL_LIMIT;
 }
 
 /**
@@ -135,13 +144,13 @@ export function structureMapping(change: StructureChange): ReferenceMapping {
     line(ref) === value ? ref : byRow ? { ...ref, row: value } : { ...ref, col: value };
   return {
     cell(ref) {
-      const mapped = mapLine(change, line(ref));
+      const mapped = lineAfter(change, line(ref));
       return mapped === null ? null : withLine(ref, mapped);
     },
     range(start, end) {
       const a = line(start);
       const b = line(end);
-      const span = mapSpan(change, Math.min(a, b), Math.max(a, b));
+      const span = spanAfter(change, Math.min(a, b), Math.max(a, b));
       if (!span) return null;
       // 거꾸로 쓴 범위(A5:A1)는 거꾸로 둔 채 끝마다 옮긴다.
       const [first, last] = a <= b ? span : [span[1], span[0]];
@@ -178,7 +187,7 @@ export function moveMapping(source: CellRange, rowOffset: number, colOffset: num
       return ref;
     },
     range(start, end) {
-      const range = rangeOf(start, end);
+      const range = bounds(start, end);
       if (inRange(source, range)) return [shift(start), shift(end)];
       if (inRange(target, range)) return null;
       return [start, end];

@@ -1,5 +1,9 @@
 import { MAX_COLS, MAX_ROWS } from "./address";
 
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const LAST_ROW = MAX_ROWS - 1;
+const LAST_COL = MAX_COLS - 1;
+
 /** 행·열 삽입이나 삭제 한 번 */
 export interface StructureChange {
   readonly kind: "insert" | "delete";
@@ -17,7 +21,7 @@ export function inverseChange(change: StructureChange): StructureChange {
 
 /** 이 축의 마지막 줄 번호 (Excel 시트 최대 크기 기준) */
 function lastLine(change: StructureChange): number {
-  return (change.axis === "row" ? MAX_ROWS : MAX_COLS) - 1;
+  return change.axis === "row" ? LAST_ROW : LAST_COL;
 }
 
 /**

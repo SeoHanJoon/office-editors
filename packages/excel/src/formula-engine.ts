@@ -2,9 +2,11 @@ import { MAX_COLS, cellKey, keyToAddress, type CellAddress, type CellRange } fro
 import { evaluateFormula, rangeOf, type EvalContext } from "./formula-evaluate";
 import { lookupFunction } from "./formula-functions";
 import { FormulaSyntaxError, parseFormula, type Expr } from "./formula-parser";
+import { mapExpr, structureMapping } from "./formula-references";
 import { FormulaError, isFormula, parseLiteral, type CellValue } from "./formula-value";
 import { RangeIndex } from "./range-index";
 import type { Sheet } from "./sheet";
+import { changesSpan, mapLine, mapSpan, type StructureChange } from "./structure";
 
 /** 계산값이 다시 정해진 셀 주소를 받는다. */
 export type FormulaChangeListener = (addresses: readonly CellAddress[]) => void;
@@ -36,6 +38,11 @@ const NAME = new FormulaError("#NAME?");
 const PENDING = Symbol("pending");
 /** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
 const STRIDE = MAX_COLS;
+const lineAfter = mapLine;
+const spanAfter = mapSpan;
+const spanChanged = changesSpan;
+const mapReferences = mapExpr;
+const bounds = rangeOf;
 /** 이만큼 일할 때마다 한 번 멈출 자리를 둔다. */
 const STEP = 256;
 /** 나눠서 계산할 때 한 번에 쓰는 시간 (ms). 한 프레임(16.7ms)의 절반쯤이다. */
@@ -70,15 +77,16 @@ export class FormulaEngine {
    * 값 셀(수식이 아닌 셀)은 처음 읽힐 때 입력을 해석해 넣는다. 10만 행 시트를 열 때 값 셀 수십만 개를 미리 해석하지 않기 위해서다.
    * 나눠서 계산하는 중에는 아직 계산 안 된 수식 셀도 없다.
    */
-  private readonly values = new Map<number, CellValue>();
+  private values = new Map<number, CellValue>();
   private readonly formulas = new Map<number, FormulaCell>();
   /** 셀 키 → 그 셀을 직접 참조하는 수식 셀 키 */
   private readonly refDependents = new Map<number, Set<number>>();
   /** 범위 → 그 범위를 참조하는 수식 셀 키 */
-  private readonly rangeDependents = new RangeIndex();
+  private rangeDependents = new RangeIndex();
   private readonly listeners = new Set<FormulaChangeListener>();
   private readonly context: EvalContext;
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeStructure: () => void;
   /** 나눠서 하는 처음 계산의 남은 일. 끝났으면 null */
   private loading: Steps | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -92,6 +100,7 @@ export class FormulaEngine {
       rangeValues: (range) => this.rangeValues(range),
     };
     this.unsubscribe = sheet.onChange(this.onSheetChange);
+    this.unsubscribeStructure = sheet.onStructureChange(this.onStructureChange);
     if (background) {
       this.loading = this.load();
       this.schedule();
@@ -135,6 +144,7 @@ export class FormulaEngine {
     this.timer = null;
     this.loading = null;
     this.unsubscribe();
+    this.unsubscribeStructure();
     this.listeners.clear();
   }
 
@@ -149,6 +159,68 @@ export class FormulaEngine {
     for (const key of this.update(addresses.map(cellKey))) recalculated.add(key);
     this.notify(recalculated);
   };
+
+  /**
+   * 행·열이 들어가거나 빠졌다. 시트가 수식 글자를 고친 것과 같은 규칙(structureMapping)으로 엔진이 가진 것도 옮긴다.
+   * 참조가 통째로 밀리기만 한 수식은 값이 그대로이므로 다시 계산하지 않는다.
+   * 뜻이 바뀐 수식(지운 셀 참조, 늘거나 줄어든 범위)과 따로 값이 바뀐 셀(addresses)에서부터 다시 계산한다.
+   */
+  private readonly onStructureChange = (change: StructureChange, addresses: readonly CellAddress[]): void => {
+    // 처음 계산 중이면 남은 계산이 옛 주소로 새 시트를 읽게 된다. 옮기지 않고 처음 계산을 새 시트로 다시 시작한다.
+    if (this.loading) {
+      this.restartLoading();
+      return;
+    }
+    const touched = this.shift(change);
+    const keys = addresses.map(cellKey);
+    for (const key of keys) this.setInput(key, this.sheet.get(keyToAddress(key)));
+    const changed = new Set(keys);
+    for (const key of finish(this.recalculateFrom([...touched, ...keys]))) changed.add(key);
+    this.notify(changed);
+  };
+
+  /** 값·수식·참조 목록의 키를 change대로 옮긴다. 뜻이 바뀐 수식 셀 키(변경 뒤)를 돌려준다. */
+  private shift(change: StructureChange): number[] {
+    const byRow = change.axis === "row";
+    const move = (key: number): number | null => {
+      const row = Math.floor(key / STRIDE);
+      const col = key - row * STRIDE;
+      const line = lineAfter(change, byRow ? row : col);
+      if (line === null) return null;
+      return byRow ? line * STRIDE + col : row * STRIDE + line;
+    };
+    const lineChanges = (line: number) => spanChanged(change, line, line) || lineAfter(change, line) === null;
+    const spanChanges = (first: number, last: number) =>
+      spanChanged(change, first, last) || spanAfter(change, first, last) === null;
+
+    const values = new Map<number, CellValue>();
+    for (const [key, value] of this.values) {
+      const next = move(key);
+      if (next !== null) values.set(next, value);
+    }
+    this.values = values;
+
+    const mapping = structureMapping(change);
+    const formulas: [number, FormulaCell][] = [];
+    const touched: number[] = [];
+    for (const [key, formula] of this.formulas) {
+      const next = move(key);
+      if (next === null) continue;
+      const affected =
+        formula.refs.some((ref) => lineChanges(byRow ? Math.floor(ref / STRIDE) : ref % STRIDE)) ||
+        formula.ranges.some((range) =>
+          byRow ? spanChanges(range.top, range.bottom) : spanChanges(range.left, range.right),
+        );
+      const expr = formula.expr && mapReferences(formula.expr, mapping);
+      formulas.push([next, expr === formula.expr ? formula : cellOf(expr)]);
+      if (affected) touched.push(next);
+    }
+    this.formulas.clear();
+    this.refDependents.clear();
+    this.rangeDependents = new RangeIndex();
+    for (const [key, formula] of formulas) this.index(key, formula);
+    return touched;
+  }
 
   private schedule(): void {
     this.timer = setTimeout(this.runSlice, 0);
@@ -169,6 +241,18 @@ export class FormulaEngine {
     // 다 끝났으면 정해진 셀이 없어도 알려서, 화면이 계산 중 표시를 지우게 한다.
     if (computed.length > 0 || done) this.notify(computed);
   };
+
+  /** 가진 것을 모두 버리고 처음 계산을 다시 나눠서 한다. 화면이 다시 그리도록 빈 알림을 보낸다. */
+  private restartLoading(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.values = new Map();
+    this.formulas.clear();
+    this.refDependents.clear();
+    this.rangeDependents = new RangeIndex();
+    this.loading = this.load();
+    this.schedule();
+    this.notify([]);
+  }
 
   /** 처음 계산이 남았으면 한 번에 끝낸다. 이때 정해진 수식 셀 키를 돌려준다. */
   private finishLoading(): number[] {
@@ -223,7 +307,11 @@ export class FormulaEngine {
   }
 
   private addFormula(key: number, input: string): void {
-    const formula = parseCell(input);
+    this.index(key, parseCell(input));
+  }
+
+  /** 수식 셀을 두고, 참조하는 셀·범위에서 이 셀을 찾을 수 있게 적어 둔다. */
+  private index(key: number, formula: FormulaCell): void {
     this.formulas.set(key, formula);
     for (const ref of formula.refs) {
       let dependents = this.refDependents.get(ref);
@@ -427,6 +515,11 @@ function parseCell(input: string): FormulaCell {
     // 화면은 틀린 수식을 확정하지 못하게 막지만, 처음 데이터나 코드로 넣은 틀린 수식도 멈추지 않고 #NAME?으로 둔다.
     if (!(error instanceof FormulaSyntaxError)) throw error;
   }
+  return cellOf(expr);
+}
+
+/** 구문 나무에서 참조 목록을 모아 수식 셀을 만든다. */
+function cellOf(expr: Expr | null): FormulaCell {
   const refs: number[] = [];
   const ranges: CellRange[] = [];
   if (expr) collectReferences(expr, refs, ranges);
@@ -444,7 +537,7 @@ function collectReferences(expr: Expr, refs: number[], ranges: CellRange[]): voi
       refs.push(cellKey(expr.ref));
       return;
     case "range":
-      ranges.push(rangeOf(expr.start, expr.end));
+      ranges.push(bounds(expr.start, expr.end));
       return;
     case "unary":
     case "percent":

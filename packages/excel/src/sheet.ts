@@ -3,6 +3,14 @@ import { rewriteFormula, structureMapping } from "./formula-references";
 import { isFormula } from "./formula-value";
 import { mapLine, type StructureChange } from "./structure";
 
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const STRIDE = MAX_COLS;
+const lineAfter = mapLine;
+const formulaInput = isFormula;
+const rewrite = rewriteFormula;
+const addressOf = keyToAddress;
+const keyOf = cellKey;
+
 export interface SheetOptions {
   /** 행 수. 1 이상 MAX_ROWS 이하 */
   rowCount: number;
@@ -149,27 +157,29 @@ export class Sheet {
     const next = new Map<number, string>();
     const removed: CellChange[] = [];
     const rewritten: CellChange[] = [];
+    // 셀이 수십만 개라 주소 객체는 없어지거나 고친 셀에만 만든다.
     for (const [key, value] of this.cells) {
-      const row = Math.floor(key / MAX_COLS);
-      const col = key - row * MAX_COLS;
-      const line = mapLine(change, byRow ? row : col);
+      const row = Math.floor(key / STRIDE);
+      const col = key - row * STRIDE;
+      const line = lineAfter(change, byRow ? row : col);
       if (line === null) {
         removed.push({ address: { row, col }, value });
         continue;
       }
-      const address = byRow ? { row: line, col } : { row, col: line };
-      let text = value;
-      if (isFormula(value)) {
-        text = rewriteFormula(value, mapping);
-        if (text !== value) rewritten.push({ address, value });
+      const nextKey = byRow ? line * STRIDE + col : row * STRIDE + line;
+      if (!formulaInput(value)) {
+        next.set(nextKey, value);
+        continue;
       }
-      next.set(cellKey(address), text);
+      const text = rewrite(value, mapping);
+      if (text !== value) rewritten.push({ address: addressOf(nextKey), value });
+      next.set(nextKey, text);
     }
 
     // 옮기고 고친 결과와 같은 값은 넣지 않고 알리지도 않는다.
     const changed: CellAddress[] = [];
     for (const { address, value } of cells) {
-      const key = cellKey(address);
+      const key = keyOf(address);
       if ((next.get(key) ?? "") === value) continue;
       if (value === "") next.delete(key);
       else next.set(key, value);

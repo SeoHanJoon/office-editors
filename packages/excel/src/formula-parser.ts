@@ -1,4 +1,4 @@
-import { parseA1, type CellAddress } from "./address";
+import { MAX_COLS, MAX_ROWS, type CellAddress } from "./address";
 import { FUNCTIONS } from "./formula-functions";
 import { TYPED_ERROR_CODES, type ErrorCode } from "./formula-value";
 
@@ -75,23 +75,50 @@ export function findFormulaProblem(input: string): FormulaSyntaxError | null {
   }
 }
 
-const OPERATORS = ["<>", "<=", ">=", "+", "-", "*", "/", "^", "&", "=", "<", ">", "%", "(", ")", ",", ":"];
-const REF = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_.(])/;
-const NAME = /^[\p{L}_\\][\p{L}\p{N}_.]*/u;
-const NUMBER = /^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/;
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const ROW_LIMIT = MAX_ROWS;
+const COL_LIMIT = MAX_COLS;
 
-/** "="로 시작하는 수식을 조각으로 나눈다. 쓸 수 없는 글자가 있으면 FormulaSyntaxError. 마지막 조각은 늘 "end"다. */
+/** 한 글자 연산자. 두 글자(<>, <=, >=)는 따로 본다. */
+const OPERATORS = new Set(["+", "-", "*", "/", "^", "&", "=", "<", ">", "%", "(", ")", ",", ":"]);
+// 글자를 잘라 새로 만들지 않도록 y(sticky) 정규식을 lastIndex 자리에 대 본다. (행 삽입 때 수식 20만 개를 다시 읽는다)
+const REF = /(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_.(])/y;
+const NAME = /[\p{L}_\\][\p{L}\p{N}_.]*/uy;
+const NUMBER = /(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/y;
+
+/** regex를 input의 pos 자리에 대 본다. */
+function matchAt(regex: RegExp, input: string, pos: number): RegExpExecArray | null {
+  regex.lastIndex = pos;
+  return regex.exec(input);
+}
+
+/** "A1"의 열 글자와 행 숫자로 주소를 만든다. 시트 밖이거나 행이 0으로 시작하면 null (parseA1과 같은 규칙) */
+function refAddress(letters: string, digits: string): CellAddress | null {
+  if (digits.length > 7 || digits.charCodeAt(0) === 48 /* 0 */) return null;
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) col = col * 26 + ((letters.charCodeAt(i) | 32) - 96);
+  const row = Number(digits);
+  if (col > COL_LIMIT || row > ROW_LIMIT) return null;
+  return { row: row - 1, col: col - 1 };
+}
+
+/**
+ * "="로 시작하는 수식을 조각으로 나눈다. 쓸 수 없는 글자가 있으면 FormulaSyntaxError. 마지막 조각은 늘 "end"다.
+ * 첫 글자를 보고 맞을 수 있는 정규식만 대 본다.
+ */
 export function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   let pos = 1; // "=" 다음부터
   while (pos < input.length) {
-    const rest = input.slice(pos);
-    const char = rest[0]!;
+    const char = input[pos]!;
     if (char === " " || char === "\n") {
       pos++;
       continue;
     }
-    const number = NUMBER.exec(rest);
+    const code = input.charCodeAt(pos);
+    const lower = code | 32;
+    const letter = lower >= 97 && lower <= 122;
+    const number = (code >= 48 && code <= 57) || char === "." ? matchAt(NUMBER, input, pos) : null;
     if (number) {
       tokens.push({ type: "number", value: Number(number[0]), pos });
       pos += number[0].length;
@@ -104,21 +131,21 @@ export function tokenize(input: string): Token[] {
       continue;
     }
     if (char === "#") {
-      const code = TYPED_ERROR_CODES.find((c) => rest.toUpperCase().startsWith(c));
+      const code = TYPED_ERROR_CODES.find((c) => input.slice(pos, pos + c.length).toUpperCase() === c);
       if (!code) throw new FormulaSyntaxError("알 수 없는 에러 값입니다.", pos);
       tokens.push({ type: "error", code, pos });
       pos += code.length;
       continue;
     }
-    const ref = REF.exec(rest);
-    const address = ref && parseA1(ref[2]! + ref[4]!);
+    const ref = letter || char === "$" ? matchAt(REF, input, pos) : null;
+    const address = ref && refAddress(ref[2]!, ref[4]!);
     if (ref && address) {
       const end = pos + ref[0].length;
       tokens.push({ type: "ref", ref: { ...address, colAbsolute: ref[1] === "$", rowAbsolute: ref[3] === "$" }, pos, end });
       pos = end;
       continue;
     }
-    const name = NAME.exec(rest);
+    const name = letter || char === "_" || char === "\\" || code > 127 ? matchAt(NAME, input, pos) : null;
     if (name) {
       const text = name[0];
       const upper = text.toUpperCase();
@@ -128,7 +155,13 @@ export function tokenize(input: string): Token[] {
       pos += text.length;
       continue;
     }
-    const op = OPERATORS.find((o) => rest.startsWith(o));
+    const next = input[pos + 1];
+    const op =
+      (char === "<" && (next === ">" || next === "=")) || (char === ">" && next === "=")
+        ? char + next
+        : OPERATORS.has(char)
+          ? char
+          : null;
     if (!op) throw new FormulaSyntaxError(`수식에 쓸 수 없는 글자입니다: ${char}`, pos);
     tokens.push({ type: "op", op, pos });
     pos += op.length;

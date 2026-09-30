@@ -2,6 +2,9 @@ import type { Command } from "@office/command-core";
 import type { CellChange, Sheet, StructureResult } from "./sheet";
 import { inverseChange, mapLine, type StructureChange } from "./structure";
 
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const lineAfter = mapLine;
+
 /**
  * 행·열 삽입이나 삭제 한 번. 셀을 옮기고 수식 참조를 고치는 일은 Sheet.changeStructure가 한다.
  *
@@ -31,7 +34,7 @@ export class StructureCommand implements Command {
     const restore: CellChange[] = [...this.result.removed];
     for (const { address, value } of this.result.rewritten) {
       // 고친 수식은 지운 줄에 있지 않으므로 반대 변경으로 늘 제자리를 찾는다.
-      const line = mapLine(inverse, byRow ? address.row : address.col)!;
+      const line = lineAfter(inverse, byRow ? address.row : address.col)!;
       restore.push({ address: byRow ? { row: line, col: address.col } : { row: address.row, col: line }, value });
     }
     this.sheet.changeStructure(inverse, restore);
