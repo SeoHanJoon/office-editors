@@ -22,3 +22,6 @@ recordings/
 
 # Claude Code 개인 설정
 .claude/settings.local.json
+
+# Claude Code 훅 상태 파일
+.claude/.cache/
