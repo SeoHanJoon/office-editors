@@ -223,11 +223,6 @@ export class GridView {
     this.editor.focus();
   }
 
-  /** 떠 있는 알림 글자(클립보드가 막혔을 때 등). 없으면 null */
-  get noticeMessage(): string | null {
-    return this.notice.hidden ? null : this.notice.textContent;
-  }
-
   destroy(): void {
     cancelAnimationFrame(this.frame);
     clearTimeout(this.noticeTimer);
