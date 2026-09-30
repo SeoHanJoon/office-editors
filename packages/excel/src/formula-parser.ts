@@ -1,4 +1,5 @@
 import { parseA1, type CellAddress } from "./address";
+import { FUNCTIONS } from "./formula-functions";
 import { TYPED_ERROR_CODES, type ErrorCode } from "./formula-value";
 
 /** 수식 안의 셀 참조. `$`가 붙은 쪽은 절대 참조다. (복사·행 삽입 때 쓴다: Step 6) */
@@ -218,7 +219,7 @@ class Parser {
         this.index++;
         return { kind: "range", start: token.ref, end: this.expectRef() };
       case "function":
-        return this.call(token.name);
+        return this.call(token.name, token.pos);
       case "op":
         if (token.op === "(") {
           const expr = this.comparison();
@@ -231,23 +232,27 @@ class Parser {
     }
   }
 
-  /** 함수 이름 다음의 `(인자, ...)`를 읽는다. 빈 인자 자리는 missing이다. */
-  private call(name: string): Expr {
+  /**
+   * 함수 이름 다음의 `(인자, ...)`를 읽는다. 빈 인자 자리는 missing이다.
+   * 아는 함수인데 인자 개수가 맞지 않으면 Excel처럼 문법 오류다. 모르는 함수는 계산할 때 #NAME?
+   */
+  private call(name: string, pos: number): Expr {
     this.expectOp("(", "여는 괄호가 없습니다.");
     const args: Expr[] = [];
     if (this.peekOp(")")) {
       this.index++;
-      return { kind: "call", name, args };
-    }
-    for (;;) {
-      args.push(this.peekOp(",") || this.peekOp(")") ? { kind: "missing" } : this.comparison());
-      if (this.peekOp(",")) {
+    } else {
+      for (;;) {
+        args.push(this.peekOp(",") || this.peekOp(")") ? { kind: "missing" } : this.comparison());
+        if (!this.peekOp(",")) break;
         this.index++;
-        continue;
       }
       this.expectOp(")", "닫는 괄호())가 없습니다.");
-      return { kind: "call", name, args };
     }
+    const spec = Object.hasOwn(FUNCTIONS, name) ? FUNCTIONS[name] : undefined;
+    if (spec && args.length < spec.minArgs) throw new FormulaSyntaxError(`${name} 함수의 인수가 너무 적습니다.`, pos);
+    if (spec && args.length > spec.maxArgs) throw new FormulaSyntaxError(`${name} 함수의 인수가 너무 많습니다.`, pos);
+    return { kind: "call", name, args };
   }
 
   private expectRef(): CellRef {

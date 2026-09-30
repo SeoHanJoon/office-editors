@@ -73,7 +73,7 @@ describe("값 읽기", () => {
   test("함수 이름은 대문자로 바꾸고, 괄호가 바로 붙어야 함수다", () => {
     expect(parse("=sum(A1:A3, 2)")).toBe("SUM(A1:A3,2)");
     expect(parse("=LOG10(1)")).toBe("LOG10(1)");
-    expect(parse("=SUM()")).toBe("SUM()");
+    expect(parse("=NOPE()")).toBe("NOPE()");
   });
 
   test("빈 인자 자리는 missing으로 남긴다", () => {
@@ -147,6 +147,12 @@ describe("문법 오류", () => {
     expect(syntaxError("=#ABC").position).toBe(1);
     expect(syntaxError("=1;2").position).toBe(2);
     expect(syntaxError("=$1").position).toBe(1);
+  });
+
+  test("아는 함수의 인자 개수가 맞지 않으면 오류다", () => {
+    expect(syntaxError("=1+SUM()")).toMatchObject({ position: 3, message: expect.stringContaining("너무 적습니다") });
+    expect(syntaxError(`=SUM(${Array(256).fill(1).join(",")})`).message).toContain("너무 많습니다");
+    expect(parse(`=SUM(${Array(255).fill(1).join(",")})`)).toMatch(/^SUM\(/);
   });
 
   test("범위 : 뒤에 셀 주소가 없으면 오류다", () => {
