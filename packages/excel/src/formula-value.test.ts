@@ -42,6 +42,12 @@ describe("셀 입력을 값으로 바꾸기", () => {
     expect(parseLiteral("FALSE")).toBe(false);
   });
 
+  test("앞에 작은따옴표(')를 붙이면 뒤의 글자를 그대로 글자로 둔다", () => {
+    expect(parseLiteral("'5")).toBe("5");
+    expect(parseLiteral("'TRUE")).toBe("TRUE");
+    expect(parseLiteral("'=1+1")).toBe("=1+1");
+  });
+
   test("에러 이름을 치면 에러 값이다", () => {
     expect(parseLiteral("#N/A")).toEqual(new FormulaError("#N/A"));
     expect(parseLiteral("#div/0!")).toEqual(new FormulaError("#DIV/0!"));

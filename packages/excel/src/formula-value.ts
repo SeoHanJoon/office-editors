@@ -32,9 +32,11 @@ export function parseNumber(text: string): number | null {
 /**
  * 수식이 아닌 셀 입력을 값으로 바꾼다. (Excel과 같음)
  * 숫자 모양이면 숫자, TRUE/FALSE(대소문자 무관)는 논리값, 에러 이름은 에러, 나머지는 글자 그대로.
+ * 앞에 작은따옴표(')를 붙이면 뒤의 글자를 그대로 글자로 둔다. ("'5"는 글자 "5")
  */
 export function parseLiteral(input: string): CellValue {
   if (input === "") return null;
+  if (input.startsWith("'")) return input.slice(1);
   const number = parseNumber(input);
   if (number !== null) return number;
   const upper = input.toUpperCase();
