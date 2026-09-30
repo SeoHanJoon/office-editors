@@ -6,8 +6,10 @@
 import { DetailedCellError, HyperFormula } from "hyperformula";
 import { describe, expect, test } from "vitest";
 import { FormulaEngine } from "./formula-engine";
+import { rewriteFormula, structureMapping } from "./formula-references";
 import { FormulaError, type CellValue } from "./formula-value";
 import { Sheet } from "./sheet";
+import type { StructureChange } from "./structure";
 
 /**
  * 모든 비교에 쓰는 값. 숫자, 숫자 모양 글자, 글자, 논리값, 빈 셀, 에러가 섞여 있다.
@@ -129,4 +131,51 @@ describe("HyperFormula와 같은 결과", () => {
     expect(ours(formula)).toBe("#CYCLE!");
     expect(theirs(formula)).toBe("#CYCLE!");
   });
+});
+
+describe("행·열을 넣고 지운 뒤 수식 글자가 HyperFormula와 같다", () => {
+  // 수식은 K21에 두고, 1~8행 / A~H열 근처를 넣고 지운다.
+  const FORMULAS = [
+    "=A5+1",
+    "=$A$5*B$3+$C4",
+    "=SUM(A2:A4)",
+    "=SUM(A3:A4)",
+    "=SUM(B2:D6)+AVERAGE(A1:H1)",
+    "=MAX(C3:C3,D5)",
+    "=A1:B2",
+  ];
+  const CHANGES: StructureChange[] = [];
+  for (const axis of ["row", "col"] as const) {
+    for (const kind of ["insert", "delete"] as const) {
+      for (let index = 0; index < 7; index++) for (const count of [1, 2, 3]) CHANGES.push({ kind, axis, index, count });
+    }
+  }
+
+  function theirsAfter(formula: string, change: StructureChange): string {
+    const data: (string | null)[][] = Array.from({ length: 21 }, () => []);
+    data[20]![10] = formula;
+    const hf = HyperFormula.buildFromArray(data, { licenseKey: "gpl-v3" });
+    try {
+      const at: [number, number] = [change.index, change.count];
+      if (change.axis === "row") {
+        if (change.kind === "insert") hf.addRows(0, at);
+        else hf.removeRows(0, at);
+      } else if (change.kind === "insert") hf.addColumns(0, at);
+      else hf.removeColumns(0, at);
+      return hf.getSheetSerialized(0).flat().find((value) => typeof value === "string") as string;
+    } finally {
+      hf.destroy();
+    }
+  }
+
+  test.each(FORMULAS)("%s", (formula) => {
+    for (const change of CHANGES) {
+      const label = `${change.kind} ${change.axis} ${change.index} ×${change.count}`;
+      expect(rewriteFormula(formula, structureMapping(change)), label).toBe(theirsAfter(formula, change));
+    }
+  });
+
+  // 비교에서 뺀 것
+  // - 거꾸로 쓴 범위(`A5:A2`): HyperFormula는 읽을 때 `A2:A5`로 바꿔 둔다. (Excel도 입력할 때 바꾼다) 여기서는 입력한 글자를 그대로 두므로 비교하지 않는다.
+  // - 잘라내 붙여넣어 덮어쓴 자리를 가리키던 참조: HyperFormula(moveCells)는 주소를 그대로 두고, 여기서는 #REF!로 둔다. Excel 확인이 필요하다. (ADR 참고)
 });

@@ -2,7 +2,7 @@ import { parseA1, type CellAddress } from "./address";
 import { FUNCTIONS } from "./formula-functions";
 import { TYPED_ERROR_CODES, type ErrorCode } from "./formula-value";
 
-/** 수식 안의 셀 참조. `$`가 붙은 쪽은 절대 참조다. (복사·행 삽입 때 쓴다: Step 6) */
+/** 수식 안의 셀 참조. `$`가 붙은 쪽은 절대 참조다. (복사할 때 `$`가 붙은 쪽은 옮기지 않는다) */
 export interface CellRef extends CellAddress {
   readonly rowAbsolute: boolean;
   readonly colAbsolute: boolean;
@@ -39,12 +39,14 @@ export class FormulaSyntaxError extends Error {
   }
 }
 
-type Token =
+/** 수식 글자를 나눈 조각. pos는 조각이 시작하는 글자 위치("=" 포함)다. */
+export type Token =
   | { type: "number"; value: number; pos: number }
   | { type: "string"; value: string; pos: number }
   | { type: "boolean"; value: boolean; pos: number }
   | { type: "error"; code: ErrorCode; pos: number }
-  | { type: "ref"; ref: CellRef; pos: number }
+  /** end는 참조 글자가 끝난 다음 위치다. (참조만 바꿔 끼울 때 쓴다) */
+  | { type: "ref"; ref: CellRef; pos: number; end: number }
   | { type: "name"; name: string; pos: number }
   | { type: "function"; name: string; pos: number }
   | { type: "op"; op: string; pos: number }
@@ -78,7 +80,8 @@ const REF = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_.(])/;
 const NAME = /^[\p{L}_\\][\p{L}\p{N}_.]*/u;
 const NUMBER = /^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/;
 
-function tokenize(input: string): Token[] {
+/** "="로 시작하는 수식을 조각으로 나눈다. 쓸 수 없는 글자가 있으면 FormulaSyntaxError. 마지막 조각은 늘 "end"다. */
+export function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   let pos = 1; // "=" 다음부터
   while (pos < input.length) {
@@ -110,8 +113,9 @@ function tokenize(input: string): Token[] {
     const ref = REF.exec(rest);
     const address = ref && parseA1(ref[2]! + ref[4]!);
     if (ref && address) {
-      tokens.push({ type: "ref", ref: { ...address, colAbsolute: ref[1] === "$", rowAbsolute: ref[3] === "$" }, pos });
-      pos += ref[0].length;
+      const end = pos + ref[0].length;
+      tokens.push({ type: "ref", ref: { ...address, colAbsolute: ref[1] === "$", rowAbsolute: ref[3] === "$" }, pos, end });
+      pos = end;
       continue;
     }
     const name = NAME.exec(rest);
