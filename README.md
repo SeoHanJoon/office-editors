@@ -68,7 +68,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 
 | Step | 대상 | 할 일 | 완료 기준 | ADR |
 |---|---|---|---|---|
-| **0** | 공통 | 모노레포 뼈대 만들기 (pnpm, Turborepo, TypeScript, Vitest, Playwright 녹화 설정) + `apps/web` 빈 페이지 1개와 그 페이지를 여는 브라우저 테스트 1개 | `pnpm test`, `pnpm typecheck`, `pnpm e2e`가 통과하고, `pnpm e2e:record`로 `recordings/`에 영상이 생김 | 예정 |
+| **0** ✅ | 공통 | 모노레포 뼈대 만들기 (pnpm, Turborepo, TypeScript, Vitest, Playwright 녹화 설정) + `apps/web` 빈 페이지 1개와 그 페이지를 여는 브라우저 테스트 1개 | `pnpm test`, `pnpm typecheck`, `pnpm e2e`가 통과하고, `pnpm e2e:record`로 `recordings/`에 영상이 생김 | [0001](adr/0001-monorepo-tooling.md), [0002](adr/0002-internal-packages-as-source.md), [0003](adr/0003-test-setup.md), [0004](adr/0004-pr-recordings-in-ci.md) (폐기), [0005](adr/0005-pr-recordings-gh-attach.md), [0006](adr/0006-pr-as-is-to-be-videos.md) |
 | **1** | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | 예정 |
 | **2** | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 | 1,000행 표가 화면에 보이고 선택이 됨 | 예정 |
 | **3** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
@@ -125,7 +125,8 @@ pnpm e2e          # 브라우저 테스트 실행 (녹화 없음)
 pnpm e2e:record   # 녹화하면서 실행 → recordings/ 폴더에 영상(.webm) 저장
 ```
 
-**PR 올릴 때:** 화면에 영향이 있는 변경이면 `pnpm e2e:record`로 녹화한 영상을 PR 본문에 드래그해서 첨부합니다.
+**PR 올릴 때:** `/pr`이 브라우저 테스트를 녹화해 `gh --attach`로 PR 본문에 넣습니다. PR에서 바로 재생됩니다. (GitHub CLI v2.99.0 이상 필요)
+기존 화면을 바꾼 PR이면 바뀌기 전(as-is, `main`)과 후(to-be)를 나란히 올리고, 새 기능이면 to-be만 올립니다.
 
 ### 성능 측정 (Step 4부터)
 
@@ -165,6 +166,7 @@ Node.js 24.21 (LTS, `.nvmrc` 참고)과 pnpm이 필요합니다. (Step 0 완료 
 ```bash
 nvm use          # .nvmrc의 Node 버전으로 전환
 pnpm install     # 설치
+pnpm --filter @office/web exec playwright install chromium  # 브라우저 테스트용 Chromium 설치 (처음 한 번)
 pnpm dev         # 개발 서버 실행
 pnpm test        # 단위 테스트
 pnpm e2e         # 브라우저 테스트

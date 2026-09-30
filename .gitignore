@@ -25,3 +25,7 @@ recordings/
 
 # Claude Code 훅 상태 파일
 .claude/.cache/
+
+# Next.js가 생성하는 타입 파일
+next-env.d.ts
+*.tsbuildinfo
