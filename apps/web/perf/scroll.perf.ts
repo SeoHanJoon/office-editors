@@ -116,22 +116,35 @@ test("② Chrome 성능 기록", async ({ page, browser }) => {
     await scroll(page, scenario, FRAMES);
     const trace = JSON.parse((await browser.stopTracing()).toString()) as { traceEvents: TraceEvent[] };
 
-    const states = new Map<string, number>();
+    // Chrome은 한 프레임(frame_sequence)에 기록을 여러 개 남기기도 한다. (같은 프레임에 "모두 나감"과 "일부만 나감"이 함께 붙는 식)
+    // 프레임 번호별로 묶어 가장 좋은 상태 하나로 센다. 다른 출처가 섞이지 않도록 기록이 가장 많은 출처만 본다.
+    const sources = new Map<number, Map<number, Set<string>>>();
     const callbacks: number[] = [];
     for (const event of trace.traceEvents) {
-      if (event.name === "PipelineReporter" && event.ph === "b") {
-        const state = event.args?.frame_reporter?.state ?? "unknown";
-        states.set(state, (states.get(state) ?? 0) + 1);
+      const reporter = event.args?.frame_reporter;
+      if (event.name === "PipelineReporter" && event.ph === "b" && reporter) {
+        const frames = sources.get(reporter.frame_source) ?? new Map<number, Set<string>>();
+        const states = frames.get(reporter.frame_sequence) ?? new Set<string>();
+        states.add(reporter.state);
+        frames.set(reporter.frame_sequence, states);
+        sources.set(reporter.frame_source, frames);
       }
       if (event.name === "FireAnimationFrame" && event.dur !== undefined) callbacks.push(event.dur / 1000);
     }
-    const presented = states.get("STATE_PRESENTED_ALL") ?? 0;
-    const dropped = (states.get("STATE_DROPPED") ?? 0) + (states.get("STATE_PRESENTED_PARTIAL") ?? 0);
+    const frames = [...sources.values()].sort((a, b) => b.size - a.size)[0] ?? new Map<number, Set<string>>();
+    const count = { presented: 0, partial: 0, dropped: 0 };
+    for (const states of frames.values()) {
+      if (states.has("STATE_PRESENTED_ALL")) count.presented++;
+      else if (states.has("STATE_PRESENTED_PARTIAL")) count.partial++;
+      else if (states.has("STATE_DROPPED")) count.dropped++;
+    }
     callbacks.sort((a, b) => a - b);
     rows.push({
       상황: scenario.name,
-      "화면에 나간 프레임": presented,
-      "버리거나 일부만 나간 프레임": dropped,
+      "화면에 나간 프레임": count.presented,
+      // 일부만: 화면은 갱신됐지만 메인 스레드(우리 그리기)가 그 프레임에 늦음
+      "일부만 나간 프레임": count.partial,
+      "버린 프레임": count.dropped,
       // 프레임마다 스크롤을 옮기는 측정 코드의 콜백(아주 짧음)과 GridView 그리기 콜백이 함께 들어 있다.
       "rAF 콜백 p95(ms)": ms(percentile(callbacks, 0.95)),
       "rAF 콜백 최대(ms)": ms(callbacks[callbacks.length - 1] ?? 0),
@@ -145,5 +158,5 @@ interface TraceEvent {
   name: string;
   ph: string;
   dur?: number;
-  args?: { frame_reporter?: { state?: string } };
+  args?: { frame_reporter?: { state: string; frame_source: number; frame_sequence: number } };
 }
