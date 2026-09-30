@@ -70,17 +70,18 @@ ADR은 아래 형식으로 짧게 씁니다.
 |---|---|---|---|---|
 | **0** ✅ | 공통 | 모노레포 뼈대 만들기 (pnpm, Turborepo, TypeScript, Vitest, Playwright 녹화 설정) + `apps/web` 빈 페이지 1개와 그 페이지를 여는 브라우저 테스트 1개 | `pnpm test`, `pnpm typecheck`, `pnpm e2e`가 통과하고, `pnpm e2e:record`로 `recordings/`에 영상이 생김 | [0001](adr/0001-monorepo-tooling.md), [0002](adr/0002-internal-packages-as-source.md), [0003](adr/0003-test-setup.md), [0004](adr/0004-pr-recordings-in-ci.md) (폐기), [0005](adr/0005-pr-recordings-gh-attach.md), [0006](adr/0006-pr-as-is-to-be-videos.md) |
 | **1** ✅ | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | [0007](adr/0007-command-history.md) |
-| **2** | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 | 1,000행 표가 화면에 보이고 선택이 됨 | 예정 |
-| **3** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
-| **4** | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | 예정 |
-| **5** | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | 예정 |
-| **6** | Docs | Tiptap으로 기본 문서 편집 + 공통 undo 연결 | 글쓰기·서식·undo 동작 | 예정 |
-| **7** | PPT | 슬라이드 추가/삭제, 텍스트·도형 배치 + 공통 undo 연결 | 슬라이드 3장 편집 가능 | 예정 |
-| **8** | 확장 (선택) | 실시간 협업(Yjs) 또는 AI 편집 | 해당 Step 시작 시 정의 | 예정 |
+| **2** ✅ | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 (범위 선택, 빠른 이동 키 포함) | 1,000행 표가 화면에 보이고 선택이 됨 | [0008](adr/0008-cell-storage.md), [0009](adr/0009-grid-view.md), [0010](adr/0010-e2e-grid-state.md), [0011](adr/0011-split-cell-input-step.md), [0012](adr/0012-selection-model.md) |
+| **3** | Excel | 셀 값 입력 (셀 위 DOM 입력창, 한글 입력) + 공통 undo 연결 | 셀에 값(한글 포함)을 입력하고 undo/redo가 동작함 | 예정 |
+| **4** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
+| **5** | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | 예정 |
+| **6** | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | 예정 |
+| **7** | Docs | Tiptap으로 기본 문서 편집 + 공통 undo 연결 | 글쓰기·서식·undo 동작 | 예정 |
+| **8** | PPT | 슬라이드 추가/삭제, 텍스트·도형 배치 + 공통 undo 연결 | 슬라이드 3장 편집 가능 | 예정 |
+| **9** | 확장 (선택) | 실시간 협업(Yjs) 또는 AI 편집 | 해당 Step 시작 시 정의 | 예정 |
 
 > 각 Step이 끝나면 체크(✅)하고, ADR 칸에 링크를 넣습니다.
 
-### Excel 성능 목표 (Step 4)
+### Excel 성능 목표 (Step 5)
 
 | 상황 | 목표 | 측정값 |
 |---|---|---|
@@ -128,7 +129,7 @@ pnpm e2e:record   # 녹화하면서 실행 → recordings/ 폴더에 영상(.web
 **PR 올릴 때:** `/pr`이 브라우저 테스트를 녹화해 `gh --attach`로 PR 본문에 넣습니다. PR에서 바로 재생됩니다. (GitHub CLI v2.99.0 이상 필요)
 기존 화면을 바꾼 PR이면 바뀌기 전(as-is, `main`)과 후(to-be)를 나란히 올리고, 새 기능이면 to-be만 올립니다.
 
-### 성능 측정 (Step 4부터)
+### 성능 측정 (Step 5부터)
 
 - 재계산 속도: `pnpm bench` (vitest bench)
 - 스크롤 60fps: Playwright로 브라우저 성능 기록 측정
@@ -172,7 +173,7 @@ pnpm test        # 단위 테스트
 pnpm e2e         # 브라우저 테스트
 pnpm e2e:record  # 브라우저 테스트 + 영상 녹화
 pnpm typecheck   # 타입 검사
-pnpm bench       # 성능 측정 (Step 4 이후)
+pnpm bench       # 성능 측정 (Step 5 이후)
 ```
 
 ---

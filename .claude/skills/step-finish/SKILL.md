@@ -19,7 +19,7 @@ disable-model-invocation: true
 pnpm typecheck
 pnpm test
 pnpm e2e        # 브라우저 테스트가 있는 Step만
-pnpm bench      # Step 4 이후, 성능 관련 변경이 있을 때만
+pnpm bench      # Step 5 이후, 성능 관련 변경이 있을 때만
 ```
 
 - 벤치마크를 돌렸으면 README "Excel 성능 목표" 표의 측정값 칸을 채운다.
