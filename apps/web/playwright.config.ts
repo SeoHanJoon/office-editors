@@ -3,7 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 // `pnpm e2e:record`는 RECORD=1로 실행되어 영상을 저장소 루트의 recordings/에 남긴다.
 const record = process.env.RECORD === "1";
-const port = 3000;
+// as-is 녹화(.claude/skills/pr/record-as-is.sh)는 다른 포트로 띄워 to-be 서버와 섞이지 않게 한다.
+const port = Number(process.env.E2E_PORT ?? 3000);
 
 export default defineConfig({
   testDir: "./e2e",
