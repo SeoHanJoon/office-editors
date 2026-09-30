@@ -11,7 +11,7 @@ export {
   type CellRange,
 } from "./address";
 export type { EditMode } from "./edit-keys";
-export { FormulaEngine, type FormulaChangeListener } from "./formula-engine";
+export { FormulaEngine, type FormulaChangeListener, type FormulaEngineOptions } from "./formula-engine";
 export { FormulaError, formatValue, type CellValue, type ErrorCode } from "./formula-value";
 export { GridView, type GridViewOptions } from "./grid-view";
 export { DEFAULT_LAYOUT, type GridLayout } from "./layout";
