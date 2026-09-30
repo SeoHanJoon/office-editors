@@ -72,7 +72,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | **1** ✅ | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | [0007](adr/0007-command-history.md) |
 | **2** ✅ | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 (범위 선택, 빠른 이동 키 포함) | 1,000행 표가 화면에 보이고 선택이 됨 | [0008](adr/0008-cell-storage.md), [0009](adr/0009-grid-view.md), [0010](adr/0010-e2e-grid-state.md), [0011](adr/0011-split-cell-input-step.md), [0012](adr/0012-selection-model.md) |
 | **3** ✅ | Excel | 셀 값 입력 (셀 위 DOM 입력창, 한글 입력) + 공통 undo 연결 | 셀에 값(한글 포함)을 입력하고 undo/redo가 동작함 | [0013](adr/0013-selection-active-cell.md), [0014](adr/0014-cell-editor-ime.md), [0015](adr/0015-set-cells-command.md), [0016](adr/0016-shared-history.md) |
-| **4** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
+| **4** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | [0017](adr/0017-formula-engine.md), [0018](adr/0018-dependency-graph-and-cycles.md), [0019](adr/0019-reject-invalid-formula.md), [0020](adr/0020-grid-view-engine.md) |
 | **5** | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | 예정 |
 | **6** | Excel | 복사/붙여넣기, 행·열 삽입/삭제 시 수식 참조 자동 수정 | 실제 Excel과 복붙 호환 | 예정 |
 | **7** | Docs | Tiptap으로 기본 문서 편집 + 공통 undo 연결 | 글쓰기·서식·undo 동작 | 예정 |
