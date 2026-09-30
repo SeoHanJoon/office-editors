@@ -1,7 +1,17 @@
 "use client";
 
 import { History } from "@office/command-core";
-import { GridView, parseA1, rangeToA1, selectionRange, toA1, type EditMode } from "@office/excel";
+import {
+  FormulaEngine,
+  GridView,
+  formatValue,
+  parseA1,
+  rangeToA1,
+  selectionRange,
+  toA1,
+  type CellAddress,
+  type EditMode,
+} from "@office/excel";
 import { useEffect, useRef, useState } from "react";
 import { createSampleSheet } from "./sample-data";
 
@@ -16,9 +26,13 @@ export interface ExcelTestHandle {
     visible: string;
     /** 셀 입력 중이면 "enter"(글자를 쳐서 시작) 또는 "edit"(F2·더블클릭으로 시작), 아니면 null */
     editing: EditMode | null;
+    /** 틀린 수식이라 확정하지 못했다는 알림이 떠 있으면 그 글자, 아니면 null */
+    problem: string | null;
   };
-  /** 셀("B3")에 입력된 글자. 빈 셀이면 "" */
+  /** 셀("B3")에 입력된 글자. 수식이면 "=A1+1"처럼 수식 그대로. 빈 셀이면 "" */
   cell(a1: string): string;
+  /** 셀("B3")에 보이는 계산값 글자. 빈 셀이면 "" */
+  value(a1: string): string;
 }
 
 declare global {
@@ -27,13 +41,20 @@ declare global {
   }
 }
 
+function address(a1: string): CellAddress {
+  const result = parseA1(a1);
+  if (!result) throw new Error(`셀 주소가 아니다: ${a1}`);
+  return result;
+}
+
 export function Spreadsheet() {
   const gridRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState("A1");
 
   useEffect(() => {
     const sheet = createSampleSheet();
-    const view = new GridView(gridRef.current!, sheet, new History());
+    const engine = new FormulaEngine(sheet);
+    const view = new GridView(gridRef.current!, sheet, new History(), { engine });
     const unsubscribe = view.onSelectionChange((selection) => setActive(toA1(selection.active)));
     view.focus();
     if (process.env.NODE_ENV !== "production") {
@@ -43,17 +64,16 @@ export function Spreadsheet() {
           selection: rangeToA1(selectionRange(view.selection)),
           visible: rangeToA1(view.visibleRange),
           editing: view.editMode,
+          problem: view.problem,
         }),
-        cell: (a1) => {
-          const address = parseA1(a1);
-          if (!address) throw new Error(`셀 주소가 아니다: ${a1}`);
-          return sheet.get(address);
-        },
+        cell: (a1) => sheet.get(address(a1)),
+        value: (a1) => formatValue(engine.getValue(address(a1))),
       };
     }
     return () => {
       unsubscribe();
       view.destroy();
+      engine.destroy();
       delete window.__excel;
     };
   }, []);

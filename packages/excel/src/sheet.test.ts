@@ -25,6 +25,18 @@ describe("Sheet", () => {
     expect(sheet.get({ row: 0, col: 2 })).toBe("0012");
   });
 
+  test("값이 있는 셀만 주소와 입력한 글자로 훑는다", () => {
+    const sheet = new Sheet({ rowCount: 3, colCount: 3, data: [["a", ""], ["", "", "=A1"]] });
+
+    expect([...sheet.entries()]).toEqual(
+      expect.arrayContaining([
+        [{ row: 0, col: 0 }, "a"],
+        [{ row: 1, col: 2 }, "=A1"],
+      ]),
+    );
+    expect([...sheet.entries()]).toHaveLength(2);
+  });
+
   test("빈 셀은 빈 문자열을 돌려주고 값이 없다고 알려준다", () => {
     const sheet = new Sheet({ rowCount: 2, colCount: 2, data: [["a"]] });
 

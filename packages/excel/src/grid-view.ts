@@ -2,6 +2,8 @@ import type { History } from "@office/command-core";
 import type { CellAddress, CellRange } from "./address";
 import { CellEditor } from "./cell-editor";
 import { editAction, type EditMode } from "./edit-keys";
+import type { FormulaEngine } from "./formula-engine";
+import { findFormulaProblem } from "./formula-parser";
 import { navigate } from "./keyboard";
 import {
   DEFAULT_LAYOUT,
@@ -20,6 +22,8 @@ import { SetCellsCommand } from "./set-cells-command";
 import type { CellChange, Sheet } from "./sheet";
 
 export interface GridViewOptions {
+  /** 셀에 보여줄 계산값. 앱이 같은 sheet로 만들어 넘긴다. (ADR 0016의 History와 같은 방식) */
+  engine: FormulaEngine;
   layout?: GridLayout;
   /** 표 영역의 접근성 이름 (aria-label) */
   label?: string;
@@ -35,9 +39,11 @@ type SelectionListener = (selection: Selection) => void;
  * 키보드 입력은 활성 셀 위에 늘 떠 있는 입력창(CellEditor)이 받는다.
  *
  * 셀 값은 모두 SetCellsCommand로 history에 넣어 바꾼다. undo/redo로 값이 바뀌면 그 셀들을 선택한다.
+ * 셀에는 engine의 계산값을 그리고, 입력창에는 입력한 글자(수식)를 그대로 보여준다.
  */
 export class GridView {
   private readonly sheet: Sheet;
+  private readonly engine: FormulaEngine;
   private readonly history: History;
   private readonly layout: GridLayout;
   private readonly root: HTMLDivElement;
@@ -58,9 +64,10 @@ export class GridView {
     container: HTMLElement,
     sheet: Sheet,
     history: History,
-    { layout = DEFAULT_LAYOUT, label = "시트" }: GridViewOptions = {},
+    { engine, layout = DEFAULT_LAYOUT, label = "시트" }: GridViewOptions,
   ) {
     this.sheet = sheet;
+    this.engine = engine;
     this.history = history;
     this.layout = layout;
 
@@ -116,6 +123,11 @@ export class GridView {
   /** 셀에 값을 입력하는 중이면 그 상태, 아니면 null */
   get editMode(): EditMode | null {
     return this.editor.mode;
+  }
+
+  /** 확정하지 못한 입력(틀린 수식)을 알리는 중이면 그 글자, 아니면 null */
+  get problem(): string | null {
+    return this.editor.problemMessage;
   }
 
   /** 선택이 바뀔 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
@@ -184,12 +196,24 @@ export class GridView {
     this.requestRender();
   }
 
-  /** 입력을 확정한다. 값이 그대로면 기록하지 않는다. */
-  private commit(): void {
+  /**
+   * 입력을 확정한다. 값이 그대로면 기록하지 않는다.
+   * 문법이 틀린 수식이면 Excel처럼 확정하지 않고 입력을 이어가게 한 뒤 false를 돌려준다.
+   */
+  private commit(): boolean {
+    if (this.editor.mode) {
+      this.editor.finishComposition();
+      const problem = findFormulaProblem(this.editor.text);
+      if (problem) {
+        this.editor.showProblem(`수식에 문제가 있습니다. ${problem.message}`, problem.position);
+        return false;
+      }
+    }
     const edit = this.editor.stop();
     if (edit && edit.text !== this.sheet.get(edit.address)) {
       this.apply([{ address: edit.address, value: edit.text }]);
     }
+    return true;
   }
 
   /** 선택 범위에서 값이 있는 셀을 모두 비운다. (Delete) */
@@ -232,8 +256,7 @@ export class GridView {
         return;
       case "commit":
         event.preventDefault();
-        this.commit();
-        this.navigate(event);
+        if (this.commit()) this.navigate(event);
         return;
       case "undo":
         event.preventDefault();
@@ -306,9 +329,10 @@ export class GridView {
     // 스크롤바를 누른 것은 브라우저에 맡긴다.
     if (point.x >= this.scroller.clientWidth || point.y >= this.scroller.clientHeight) return;
     event.preventDefault(); // 글자 선택이 끌려가거나 포커스가 입력창에서 빠지지 않게
-    // 다른 셀을 누르면 입력을 확정한다. (Excel과 같음)
-    this.commit();
+    // 다른 셀을 누르면 입력을 확정한다. 확정할 수 없으면 선택을 옮기지 않는다. (Excel과 같음)
+    const committed = this.commit();
     this.focus();
+    if (!committed) return;
     // 머리글 클릭(행·열 전체 선택)은 아직 없다.
     if (isInHeader(this.layout, point.x, point.y)) return;
 
@@ -373,6 +397,6 @@ export class GridView {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    drawGrid(ctx, { sheet: this.sheet, selection: this.currentSelection, layout: this.layout, viewport });
+    drawGrid(ctx, { sheet: this.sheet, engine: this.engine, selection: this.currentSelection, layout: this.layout, viewport });
   }
 }

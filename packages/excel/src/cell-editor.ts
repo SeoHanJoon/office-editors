@@ -15,6 +15,8 @@ const BORDER = 2;
  */
 export class CellEditor {
   readonly element: HTMLTextAreaElement;
+  /** 확정할 수 없는 입력(틀린 수식)일 때 입력창 아래에 띄우는 알림 */
+  private readonly problem: HTMLDivElement;
   /** 셀 영역(머리글 제외)만큼의 틀. 입력창이 머리글 위로 넘치지 않게 잘라낸다. */
   private readonly frame: HTMLDivElement;
   private readonly layout: GridLayout;
@@ -47,11 +49,23 @@ export class CellEditor {
     ].join(";");
     this.hide();
 
+    this.problem = document.createElement("div");
+    this.problem.setAttribute("role", "alert");
+    this.problem.style.cssText = [
+      "position:absolute;left:0;top:0;padding:4px 8px;white-space:nowrap;pointer-events:none",
+      `font:${CELL_FONT};color:${THEME.problemText};background:${THEME.problemBackground}`,
+      `border:1px solid ${THEME.problemBorder};box-shadow:0 2px 6px rgba(0,0,0,0.15)`,
+    ].join(";");
+    this.problem.hidden = true;
+
     this.element.addEventListener("compositionstart", () => (this.isComposing = true));
     this.element.addEventListener("compositionend", () => (this.isComposing = false));
-    this.element.addEventListener("input", () => this.fit());
+    this.element.addEventListener("input", () => {
+      this.problem.hidden = true;
+      this.fit();
+    });
 
-    this.frame.append(this.element);
+    this.frame.append(this.element, this.problem);
     parent.append(this.frame);
   }
 
@@ -99,6 +113,19 @@ export class CellEditor {
     this.fit();
   }
 
+  /** 입력창 아래에 문제를 알리고 커서를 문제 위치에 둔다. 글자를 고치거나 입력을 끝내면 사라진다. */
+  showProblem(message: string, position: number): void {
+    this.problem.textContent = message;
+    this.problem.hidden = false;
+    const caret = Math.min(position, this.element.value.length);
+    this.element.setSelectionRange(caret, caret);
+  }
+
+  /** 문제 알림이 떠 있으면 그 글자, 아니면 null */
+  get problemMessage(): string | null {
+    return this.problem.hidden ? null : this.problem.textContent;
+  }
+
   /** 입력을 끝내고 입력창을 비운다. 입력 중이었으면 셀 주소와 입력한 글자를 돌려준다. */
   stop(): { address: CellAddress; text: string } | null {
     this.finishComposition();
@@ -107,6 +134,7 @@ export class CellEditor {
     this.currentAddress = null;
     this.currentMode = null;
     this.element.value = "";
+    this.problem.hidden = true;
     this.hide();
     this.fit();
     return address ? { address, text } : null;
@@ -137,6 +165,7 @@ export class CellEditor {
     const x = rect.x - layout.headerWidth - BORDER / 2;
     const y = rect.y - layout.headerHeight - BORDER / 2;
     this.element.style.transform = `translate(${x}px, ${y}px)`;
+    this.problem.style.transform = `translate(${x}px, ${y + rect.height + BORDER + 2}px)`;
     this.element.style.height = `${rect.height + BORDER}px`;
     this.minWidth = rect.width + BORDER;
     this.maxWidth = Math.max(areaWidth - x, this.minWidth);

@@ -17,6 +17,16 @@ export interface CellRange {
   readonly right: number;
 }
 
+/** 주소를 숫자 키 하나로 바꾼다. 열 수가 바뀌어도 키가 그대로이도록 Excel 최대 열 수를 곱한다. (ADR 0008) */
+export function cellKey({ row, col }: CellAddress): number {
+  return row * MAX_COLS + col;
+}
+
+/** cellKey로 만든 키를 주소로 되돌린다. */
+export function keyToAddress(key: number): CellAddress {
+  return { row: Math.floor(key / MAX_COLS), col: key % MAX_COLS };
+}
+
 /** 열 번호를 열 이름으로 바꾼다. 0 → "A", 25 → "Z", 26 → "AA" */
 export function columnName(col: number): string {
   let name = "";

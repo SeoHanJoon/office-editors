@@ -1,4 +1,4 @@
-import { MAX_COLS, MAX_ROWS, toA1, type CellAddress } from "./address";
+import { MAX_COLS, MAX_ROWS, cellKey, keyToAddress, toA1, type CellAddress } from "./address";
 
 export interface SheetOptions {
   /** 행 수. 1 이상 MAX_ROWS 이하 */
@@ -59,6 +59,11 @@ export class Sheet {
     return this.cells.has(cellKey(address));
   }
 
+  /** 값이 있는 셀을 모두 [주소, 입력한 글자]로 훑는다. 순서는 정해져 있지 않다. */
+  *entries(): IterableIterator<[CellAddress, string]> {
+    for (const [key, value] of this.cells) yield [keyToAddress(key), value];
+  }
+
   /**
    * 여러 셀의 값을 한 번에 바꾸고 변경을 한 번 알린다.
    * 편집은 SetCellsCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
@@ -88,11 +93,6 @@ export class Sheet {
   private contains({ row, col }: CellAddress): boolean {
     return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0 && row < this.rowCount && col < this.colCount;
   }
-}
-
-/** 주소를 숫자 키 하나로 바꾼다. 열 수가 바뀌어도 키가 그대로이도록 Excel 최대 열 수를 곱한다. */
-function cellKey({ row, col }: CellAddress): number {
-  return row * MAX_COLS + col;
 }
 
 function assertCount(name: string, value: number, max: number): void {

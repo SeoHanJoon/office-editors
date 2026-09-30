@@ -332,3 +332,95 @@ test.describe("셀 값 입력", () => {
     expect((await state(page)).selection).toBe("F2:G3");
   });
 });
+
+test.describe("수식", () => {
+  const editor = (page: Page) => page.getByLabel("셀 입력");
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
+  // Next.js도 role="alert" 요소(페이지 이동 안내)를 두므로 글자로 좁힌다.
+  const problemAlert = (page: Page) => page.getByRole("alert").filter({ hasText: "수식에 문제가 있습니다" });
+
+  async function enter(page: Page, a1: string, text: string) {
+    await clickCell(page, a1);
+    await page.keyboard.type(text);
+    await page.keyboard.press("Enter");
+  }
+
+  test("=A2+A3을 입력하면 계산값이 보이고, 참조한 셀을 바꾸면 다시 계산된다", async ({ page }) => {
+    // 예시 시트의 A열은 번호(A2=1, A3=2)다.
+    await enter(page, "F2", "=A2+A3");
+
+    expect(await cell(page, "F2")).toBe("=A2+A3");
+    expect(await value(page, "F2")).toBe("3");
+
+    await enter(page, "A2", "10");
+    expect(await value(page, "F2")).toBe("12");
+
+    // undo하면 수식 결과도 돌아간다.
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await value(page, "F2")).toBe("3");
+  });
+
+  test("=SUM(D2:D11)은 점수 10개의 합이다", async ({ page }) => {
+    const scores = await Promise.all(Array.from({ length: 10 }, (_, i) => value(page, `D${i + 2}`)));
+    const expected = scores.reduce((total, score) => total + Number(score), 0);
+
+    await enter(page, "F2", "=sum(D2:D11)");
+
+    expect(await value(page, "F2")).toBe(String(expected));
+
+    // 수식 셀을 F2로 고치면 입력창에는 계산값이 아니라 수식이 보인다.
+    await clickCell(page, "F2");
+    await page.keyboard.press("F2");
+    await expect(editor(page)).toHaveValue("=sum(D2:D11)");
+  });
+
+  test("문법이 틀린 수식은 확정되지 않고 알림이 뜨며, 고치면 확정된다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await page.keyboard.type("=SUM(A2:A4");
+    await page.keyboard.press("Enter");
+
+    // 입력이 이어지고 다음 셀로 가지 않는다.
+    await expect(problemAlert(page)).toBeVisible();
+    await expect(nameBox(page)).toHaveValue("F2");
+    expect((await state(page)).editing).toBe("enter");
+    expect(await cell(page, "F2")).toBe("");
+
+    // 다른 셀을 눌러도 선택이 옮겨지지 않는다.
+    await clickCell(page, "H5");
+    await expect(nameBox(page)).toHaveValue("F2");
+
+    await page.keyboard.type(")");
+    await expect(problemAlert(page)).toBeHidden();
+    await page.keyboard.press("Enter");
+
+    await expect(nameBox(page)).toHaveValue("F3");
+    expect(await value(page, "F2")).toBe("6");
+    expect((await state(page)).problem).toBeNull();
+  });
+
+  test("Esc를 누르면 틀린 수식 입력을 취소하고 알림도 사라진다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await page.keyboard.type("=1+");
+    await page.keyboard.press("Enter");
+    await expect(problemAlert(page)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(problemAlert(page)).toBeHidden();
+    expect((await state(page)).editing).toBeNull();
+    expect(await cell(page, "F2")).toBe("");
+  });
+
+  test("서로를 참조하는 순환 참조는 #CYCLE!이고, 끊으면 다시 계산된다", async ({ page }) => {
+    await enter(page, "F2", "=G2+1");
+    await enter(page, "G2", "=F2+1");
+
+    expect(await value(page, "F2")).toBe("#CYCLE!");
+    expect(await value(page, "G2")).toBe("#CYCLE!");
+
+    await enter(page, "G2", "5");
+
+    expect(await value(page, "F2")).toBe("6");
+  });
+});
