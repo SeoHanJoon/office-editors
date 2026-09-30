@@ -69,7 +69,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | Step | 대상 | 할 일 | 완료 기준 | ADR |
 |---|---|---|---|---|
 | **0** ✅ | 공통 | 모노레포 뼈대 만들기 (pnpm, Turborepo, TypeScript, Vitest, Playwright 녹화 설정) + `apps/web` 빈 페이지 1개와 그 페이지를 여는 브라우저 테스트 1개 | `pnpm test`, `pnpm typecheck`, `pnpm e2e`가 통과하고, `pnpm e2e:record`로 `recordings/`에 영상이 생김 | [0001](adr/0001-monorepo-tooling.md), [0002](adr/0002-internal-packages-as-source.md), [0003](adr/0003-test-setup.md), [0004](adr/0004-pr-recordings-in-ci.md) (폐기), [0005](adr/0005-pr-recordings-gh-attach.md), [0006](adr/0006-pr-as-is-to-be-videos.md) |
-| **1** | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | 예정 |
+| **1** ✅ | 공통 | 실행 취소/다시 실행 기반 만들기 (`command-core`) | undo/redo 테스트 통과 | [0007](adr/0007-command-history.md) |
 | **2** | Excel | 셀 데이터 구조 + 화면에 표 그리기 + 셀 선택·키보드 이동 | 1,000행 표가 화면에 보이고 선택이 됨 | 예정 |
 | **3** | Excel | 수식 계산 (`=A1+B1`, `=SUM(A1:A10)`), 순환 참조 감지 | 수식 결과가 맞게 나옴 | 예정 |
 | **4** | Excel | 대용량 성능 개선 (10만 행) + 성능 측정 | 아래 성능 목표 달성 | 예정 |
