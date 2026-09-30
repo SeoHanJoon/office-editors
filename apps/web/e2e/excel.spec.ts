@@ -142,3 +142,193 @@ test("PageDown과 PageUp은 한 화면씩 옮긴다", async ({ page }) => {
   await page.keyboard.press("PageUp");
   await expect(nameBox(page)).toHaveValue("A1");
 });
+
+test.describe("셀 값 입력", () => {
+  const editor = (page: Page) => page.getByLabel("셀 입력");
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+
+  /**
+   * 한글 입력기처럼 자모를 조합하며 글자를 입력한다. (Chrome의 실제 조합 이벤트: compositionstart → update → end)
+   * syllables는 글자마다 조합 단계를 적는다. 예: [["ㅎ", "하", "한"], ["ㄱ", "그", "글"]]
+   */
+  async function typeKorean(page: Page, syllables: string[][], { finish = true } = {}) {
+    const cdp = await page.context().newCDPSession(page);
+    for (const [index, steps] of syllables.entries()) {
+      for (const text of steps) {
+        await cdp.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+        // CDP 호출에는 녹화용 slowMo가 걸리지 않아서, 녹화할 때만 조합 단계가 영상에 보이도록 쉰다.
+        if (process.env.RECORD === "1") await page.waitForTimeout(300);
+      }
+      const last = index === syllables.length - 1;
+      if (!last || finish) await cdp.send("Input.insertText", { text: steps.at(-1)! });
+    }
+    await cdp.detach();
+  }
+
+  test("글자를 치면 입력이 시작되고, Enter로 확정하면 아래 셀로 간다", async ({ page }) => {
+    await clickCell(page, "F2");
+
+    await page.keyboard.type("Hello 123");
+    await expect(editor(page)).toHaveValue("Hello 123");
+    expect((await state(page)).editing).toBe("enter");
+
+    await page.keyboard.press("Enter");
+
+    await expect(nameBox(page)).toHaveValue("F3");
+    expect(await cell(page, "F2")).toBe("Hello 123");
+    expect((await state(page)).editing).toBeNull();
+    await expect(editor(page)).toHaveValue("");
+  });
+
+  test("한글을 조합해서 입력해도 첫 글자가 사라지거나 두 번 들어가지 않는다", async ({ page }) => {
+    await clickCell(page, "F2");
+
+    await typeKorean(page, [["ㅎ"]], { finish: false });
+    // 첫 자모부터 입력창에 들어가고 입력이 시작된다.
+    await expect(editor(page)).toHaveValue("ㅎ");
+    expect((await state(page)).editing).toBe("enter");
+
+    await typeKorean(page, [["하", "한"], ["ㄱ", "그", "글"]]);
+    await expect(editor(page)).toHaveValue("한글");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "F2")).toBe("한글");
+    await expect(nameBox(page)).toHaveValue("F3");
+  });
+
+  test("한글 조합 중에 다른 셀을 누르면 조합하던 글자까지 확정되고 새 셀에는 들어가지 않는다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await typeKorean(page, [["ㅅ", "셀"], ["ㄱ", "가"]], { finish: false });
+    await expect(editor(page)).toHaveValue("셀가");
+
+    await clickCell(page, "G5");
+
+    await expect(nameBox(page)).toHaveValue("G5");
+    expect(await cell(page, "F2")).toBe("셀가");
+    expect(await cell(page, "G5")).toBe("");
+    await expect(editor(page)).toHaveValue("");
+
+    // 조합이 끝났으므로 키가 입력기에 묶이지 않고 바로 동작한다.
+    await page.keyboard.press("ArrowDown");
+    await expect(nameBox(page)).toHaveValue("G6");
+
+    // 새 셀에서 바로 한글을 쳐도 첫 글자부터 들어간다.
+    await typeKorean(page, [["ㄴ", "나"]]);
+    await page.keyboard.press("Tab");
+    expect(await cell(page, "G6")).toBe("나");
+    await expect(nameBox(page)).toHaveValue("H6");
+  });
+
+  test("글자를 쳐서 시작하면 방향키가 확정하고 옮기고, F2로 시작하면 입력창 안에서 커서를 옮긴다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await page.keyboard.type("abc");
+    await page.keyboard.press("ArrowRight");
+
+    expect(await cell(page, "F2")).toBe("abc");
+    await expect(nameBox(page)).toHaveValue("G2");
+
+    await clickCell(page, "A1");
+    await page.keyboard.press("F2");
+    await expect(editor(page)).toHaveValue("번호");
+    expect((await state(page)).editing).toBe("edit");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.type("X");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "A1")).toBe("번X호");
+    await expect(nameBox(page)).toHaveValue("A2");
+  });
+
+  test("셀을 더블클릭하면 기존 값을 고친다", async ({ page }) => {
+    const { x, y } = await cellCenter(page, "B2");
+    await page.mouse.dblclick(x, y);
+
+    const before = await cell(page, "B2");
+    await expect(editor(page)).toHaveValue(before);
+    expect((await state(page)).editing).toBe("edit");
+
+    await page.keyboard.type("님");
+    await page.keyboard.press("Tab");
+
+    expect(await cell(page, "B2")).toBe(`${before}님`);
+    await expect(nameBox(page)).toHaveValue("C2");
+  });
+
+  test("Esc를 누르면 입력을 취소하고 원래 값이 남는다", async ({ page }) => {
+    await clickCell(page, "B2");
+    const before = await cell(page, "B2");
+
+    await page.keyboard.type("취소할 값");
+    await page.keyboard.press("Escape");
+
+    expect(await cell(page, "B2")).toBe(before);
+    await expect(nameBox(page)).toHaveValue("B2");
+    expect((await state(page)).editing).toBeNull();
+  });
+
+  test("입력한 값을 Ctrl+Z로 되돌리고 Ctrl+Shift+Z로 다시 한다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await page.keyboard.type("첫째");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("둘째");
+    await page.keyboard.press("Enter");
+    await expect(nameBox(page)).toHaveValue("F4");
+
+    // 되돌리면 그 셀이 선택된다.
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(nameBox(page)).toHaveValue("F3");
+    expect(await cell(page, "F3")).toBe("");
+    expect(await cell(page, "F2")).toBe("첫째");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(nameBox(page)).toHaveValue("F2");
+    expect(await cell(page, "F2")).toBe("");
+
+    await page.keyboard.press("ControlOrMeta+Shift+z");
+    expect(await cell(page, "F2")).toBe("첫째");
+    await page.keyboard.press("ControlOrMeta+y");
+    expect(await cell(page, "F3")).toBe("둘째");
+    await expect(nameBox(page)).toHaveValue("F3");
+  });
+
+  test("Delete로 범위를 지우고 한 번에 되돌린다", async ({ page }) => {
+    await clickCell(page, "A2");
+    await clickCell(page, "C4", { shift: true });
+    const before = await Promise.all(["A2", "B3", "C4"].map((a1) => cell(page, a1)));
+
+    await page.keyboard.press("Delete");
+    for (const a1 of ["A2", "B3", "C4"]) expect(await cell(page, a1)).toBe("");
+    expect(await cell(page, "D2")).not.toBe("");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await Promise.all(["A2", "B3", "C4"].map((a1) => cell(page, a1)))).toEqual(before);
+    expect((await state(page)).selection).toBe("A2:C4");
+  });
+
+  test("Backspace는 셀을 비우고 입력을 시작한다", async ({ page }) => {
+    await clickCell(page, "B2");
+
+    await page.keyboard.press("Backspace");
+    await expect(editor(page)).toHaveValue("");
+    expect((await state(page)).editing).toBe("enter");
+    await page.keyboard.type("새 이름");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "B2")).toBe("새 이름");
+  });
+
+  test("범위를 고른 채 입력하고 Enter를 누르면 범위 안에서 다음 칸으로 간다", async ({ page }) => {
+    await clickCell(page, "F2");
+    await clickCell(page, "G3", { shift: true });
+
+    for (const value of ["가", "나", "다", "라"]) {
+      await page.keyboard.type(value);
+      await page.keyboard.press("Enter");
+    }
+
+    expect(await Promise.all(["F2", "F3", "G2", "G3"].map((a1) => cell(page, a1)))).toEqual(["가", "나", "다", "라"]);
+    // 마지막 칸 다음은 첫 칸이고, 범위는 그대로다.
+    await expect(nameBox(page)).toHaveValue("F2");
+    expect((await state(page)).selection).toBe("F2:G3");
+  });
+});

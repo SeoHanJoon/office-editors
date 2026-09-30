@@ -86,6 +86,10 @@ importers:
         version: 5.0.2(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3))
 
   packages/excel:
+    dependencies:
+      '@office/command-core':
+        specifier: workspace:*
+        version: link:../command-core
     devDependencies:
       typescript:
         specifier: ^7.0.2

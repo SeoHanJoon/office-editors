@@ -26,7 +26,7 @@ function key(combo: string): KeyInput {
 function press(selection: Selection, combo: string): [string, string] | null {
   const result = navigate(selection, key(combo), context);
   if (!result) return null;
-  return [toA1(result.selection.anchor), rangeToA1(selectionRange(result.selection))];
+  return [toA1(result.selection.active), rangeToA1(selectionRange(result.selection))];
 }
 
 describe("방향키", () => {
@@ -47,7 +47,7 @@ describe("방향키", () => {
     const once = navigate(selectCell(at("B2")), key("Shift+ArrowRight"), context)!.selection;
     const twice = navigate(once, key("Shift+ArrowDown"), context)!.selection;
 
-    expect(toA1(twice.anchor)).toBe("B2");
+    expect(toA1(twice.active)).toBe("B2");
     expect(rangeToA1(selectionRange(twice))).toBe("B2:C3");
   });
 
@@ -82,11 +82,19 @@ describe("Tab과 Enter", () => {
     expect(press(selectCell(at("B2")), "Shift+Enter")).toEqual(["B1", "B1"]);
   });
 
-  test("범위를 선택한 상태에서 누르면 범위를 풀고 활성 셀에서 옮긴다", () => {
+  test("범위를 선택한 상태에서 누르면 범위는 두고 그 안에서 활성 셀을 옮긴다", () => {
     const selection = extendTo(selectCell(at("B2")), at("D4"));
 
-    expect(press(selection, "Tab")).toEqual(["C2", "C2"]);
-    expect(press(selection, "Enter")).toEqual(["B3", "B3"]);
+    expect(press(selection, "Tab")).toEqual(["C2", "B2:D4"]);
+    expect(press(selection, "Enter")).toEqual(["B3", "B2:D4"]);
+    expect(press(selection, "Shift+Tab")).toEqual(["D4", "B2:D4"]);
+    expect(press(selection, "Shift+Enter")).toEqual(["D4", "B2:D4"]);
+  });
+
+  test("범위 안에서 옮긴 활성 셀을 기준으로 방향키가 움직인다", () => {
+    const selection = { ...extendTo(selectCell(at("B2")), at("D4")), active: at("C3") };
+
+    expect(press(selection, "ArrowRight")).toEqual(["D3", "D3"]);
   });
 
   test("시트 끝에서는 움직이지 않는다", () => {
@@ -118,9 +126,9 @@ describe("PageDown과 PageUp", () => {
     const down = navigate(selectCell(at("B2")), key("PageDown"), context)!;
     const up = navigate(selectCell(at("B6")), key("PageUp"), context)!;
 
-    expect(toA1(down.selection.anchor)).toBe("B6");
+    expect(toA1(down.selection.active)).toBe("B6");
     expect(down.scrollRows).toBe(4);
-    expect(toA1(up.selection.anchor)).toBe("B2");
+    expect(toA1(up.selection.active)).toBe("B2");
     expect(up.scrollRows).toBe(-4);
   });
 

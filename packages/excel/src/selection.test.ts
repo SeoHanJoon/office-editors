@@ -1,6 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { parseA1, toA1 } from "./address";
-import { extendTo, moveBy, moveToDataEdge, selectCell, selectionRange } from "./selection";
+import {
+  cycleInRange,
+  extendTo,
+  moveBy,
+  moveToDataEdge,
+  selectCell,
+  selectRange,
+  selectionRange,
+  type Selection,
+} from "./selection";
 import { Sheet } from "./sheet";
 
 const at = (a1: string) => parseA1(a1)!;
@@ -14,7 +23,21 @@ describe("선택 범위", () => {
     const selection = extendTo(selectCell(at("B2")), at("D4"));
 
     expect(selection.anchor).toEqual(at("B2"));
+    expect(selection.active).toEqual(at("B2"));
     expect(selectionRange(selection)).toEqual({ top: 1, left: 1, bottom: 3, right: 3 });
+  });
+
+  test("범위를 다시 늘리면 범위 안에서 옮겨 둔 활성 셀은 anchor로 돌아간다", () => {
+    const moved: Selection = { ...extendTo(selectCell(at("B2")), at("D4")), active: at("C3") };
+
+    expect(extendTo(moved, at("E5")).active).toEqual(at("B2"));
+  });
+
+  test("selectRange는 범위를 고르고 왼쪽 위 칸을 활성 셀로 둔다", () => {
+    const selection = selectRange({ top: 1, left: 1, bottom: 3, right: 2 });
+
+    expect(toA1(selection.active)).toBe("B2");
+    expect(selectionRange(selection)).toEqual({ top: 1, left: 1, bottom: 3, right: 2 });
   });
 
   test("위·왼쪽으로 늘려도 범위는 왼쪽 위부터 오른쪽 아래까지다", () => {
@@ -86,5 +109,51 @@ describe("Ctrl+방향키: 데이터 끝으로 이동", () => {
   test("시트 끝에 있으면 그대로 있다", () => {
     expect(jump("A1", "up")).toBe("A1");
     expect(jump("A12", "down")).toBe("A12");
+  });
+});
+
+describe("범위 안에서 활성 셀 돌기", () => {
+  // B2:C3 범위, 활성 셀 B2
+  const range = extendTo(selectCell(at("B2")), at("C3"));
+
+  /** direction으로 times번 옮긴 활성 셀들 */
+  function walk(direction: "up" | "down" | "left" | "right", times: number): string[] {
+    const cells: string[] = [];
+    let selection = range;
+    for (let i = 0; i < times; i++) {
+      selection = cycleInRange(selection, direction);
+      cells.push(toA1(selection.active));
+    }
+    return cells;
+  }
+
+  test("Enter 방향은 아래로 가고, 열 끝이면 다음 열 맨 위, 마지막 칸 다음은 첫 칸이다", () => {
+    expect(walk("down", 4)).toEqual(["B3", "C2", "C3", "B2"]);
+  });
+
+  test("Shift+Enter 방향은 그 반대로 돈다", () => {
+    expect(walk("up", 4)).toEqual(["C3", "C2", "B3", "B2"]);
+  });
+
+  test("Tab 방향은 오른쪽으로 가고, 행 끝이면 다음 행 맨 왼쪽, 마지막 칸 다음은 첫 칸이다", () => {
+    expect(walk("right", 4)).toEqual(["C2", "B3", "C3", "B2"]);
+  });
+
+  test("Shift+Tab 방향은 그 반대로 돈다", () => {
+    expect(walk("left", 4)).toEqual(["C3", "B3", "C2", "B2"]);
+  });
+
+  test("범위는 그대로 둔다", () => {
+    const next = cycleInRange(range, "down");
+
+    expect(selectionRange(next)).toEqual(selectionRange(range));
+    expect(next.anchor).toEqual(range.anchor);
+    expect(next.focus).toEqual(range.focus);
+  });
+
+  test("anchor가 오른쪽 아래여도 범위의 왼쪽 위부터 센다", () => {
+    const reversed = extendTo(selectCell(at("C3")), at("B2"));
+
+    expect(toA1(cycleInRange(reversed, "down").active)).toBe("B2");
   });
 });
