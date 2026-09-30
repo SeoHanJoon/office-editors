@@ -1,0 +1,64 @@
+# PR마다 브라우저 테스트를 녹화하고, 영상을 Actions 아티팩트로 올린 뒤 PR에 링크 댓글을 단다. (ADR 0004)
+name: e2e-record
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: e2e-record-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm 버전은 package.json의 packageManager를 따른다.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @office/web exec playwright install --with-deps chromium
+
+      - run: pnpm e2e:record
+
+      # 테스트가 실패해도 영상은 올린다. 실패 장면을 보는 게 더 중요하다.
+      - id: upload
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: recordings-pr-${{ github.event.pull_request.number }}
+          path: recordings/**/*.webm
+          if-no-files-found: warn
+
+      # 댓글은 PR마다 하나만 두고, 새로 녹화할 때마다 내용을 바꾼다.
+      - if: ${{ !cancelled() && steps.upload.outputs.artifact-url != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          URL: ${{ steps.upload.outputs.artifact-url }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          marker='<!-- e2e-record -->'
+          body="$marker
+          ### 🎬 브라우저 테스트 영상
+          [recordings-pr-$PR.zip 받기]($URL) (커밋 \`${SHA:0:7}\`, 90일 뒤 삭제)
+
+          압축을 풀고 \`.webm\` 파일을 Chrome이나 VS Code로 여세요."
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            -q ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
+          else
+            gh pr comment "$PR" --body "$body"
+          fi

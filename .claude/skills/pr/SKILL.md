@@ -12,16 +12,9 @@ disable-model-invocation: true
 - `pnpm typecheck`와 `pnpm test`가 통과하는지 확인한다. 실패하면 멈춘다.
 - README에서 이 Step이 ✅인지 확인한다. 아니면 `/step-finish`를 먼저 하라고 안내한다.
 
-## 2. 영상 녹화 (화면 변경이 있을 때)
+## 2. 영상 녹화
 
-- `apps/`나 에디터 패키지의 화면 코드가 바뀌었으면 녹화한다.
-
-```bash
-pnpm e2e:record
-```
-
-- 영상은 `recordings/`에 `.webm`으로 저장된다. 이 폴더는 커밋하지 않는다. (`.gitignore` 확인)
-- 어떤 테스트가 어떤 영상인지 파일 이름과 함께 목록을 만든다.
+- 영상은 GitHub Actions(`.github/workflows/e2e-record.yml`)가 PR마다 자동으로 녹화한다. 로컬에서 녹화하지 않는다. (ADR 0004)
 
 ## 3. 커밋
 
@@ -31,7 +24,7 @@ pnpm e2e:record
 
 ## 4. push와 PR 생성
 
-사용자가 확인하면 push하고 `gh pr create`로 PR을 만든다. 본문 형식:
+사용자가 확인하면 push하고 `gh pr create --assignee @me`로 PR을 만든다. (assignee는 항상 본인) 본문 형식:
 
 ```markdown
 ## Step N: <제목>
@@ -45,7 +38,7 @@ pnpm e2e:record
 | ... | ✅ |
 
 ### 설계 결정 (ADR)
-- [0003. 셀 데이터 저장 구조](adr/0003-cell-storage.md)
+- [0003. 셀 데이터 저장 구조](https://github.com/<owner>/<repo>/blob/<커밋 SHA>/adr/0003-cell-storage.md)
 
 ### 테스트
 - `pnpm typecheck` ✅
@@ -57,12 +50,15 @@ pnpm e2e:record
 |---|---|---|
 
 ### 영상
-<!-- 아래 영상 파일을 여기에 드래그해서 첨부 -->
+GitHub Actions가 녹화해서 이 PR에 링크 댓글을 답니다.
 ```
 
-## 5. 영상 첨부 안내
+- PR 본문의 파일 링크는 상대 경로(`adr/...`)로 쓰지 않는다. PR 페이지 기준으로 해석돼 404가 난다.
+  push한 커밋 SHA로 고정 주소를 만든다: `$(gh repo view --json url -q .url)/blob/$(git rev-parse HEAD)/<경로>`
+  (브랜치 이름 대신 SHA를 쓰면 머지 후 브랜치를 지워도 링크가 살아 있다.)
 
-`gh`로는 PR 본문에 영상을 올릴 수 없다. PR 링크와 함께 아래를 알려준다.
+## 5. 영상 확인
 
-- 첨부할 영상 파일의 전체 경로 목록
-- "GitHub에서 PR 본문을 편집하고, '영상' 섹션에 위 파일들을 드래그하세요."
+PR 링크를 알려주고, `gh pr checks <번호> --watch`로 `e2e-record`가 끝나기를 기다린다.
+- 성공하면 PR에 영상 링크 댓글이 달렸는지 확인해서 알려준다.
+- 실패하면 `gh run view --log-failed`로 원인을 요약해 보고한다.
