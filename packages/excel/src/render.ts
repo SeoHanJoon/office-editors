@@ -1,10 +1,14 @@
 import { columnName, type CellRange } from "./address";
+import type { FormulaEngine } from "./formula-engine";
+import { FormulaError, formatValue, type CellValue } from "./formula-value";
 import { cellRect, visibleRange, type GridLayout, type Rect, type Viewport } from "./layout";
 import { selectionRange, type Selection } from "./selection";
 import type { Sheet } from "./sheet";
 
 export interface RenderState {
   readonly sheet: Sheet;
+  /** 셀에 보여줄 계산값 */
+  readonly engine: FormulaEngine;
   readonly selection: Selection;
   readonly layout: GridLayout;
   readonly viewport: Viewport;
@@ -56,9 +60,11 @@ export function drawGrid(ctx: CanvasRenderingContext2D, state: RenderState): voi
   ctx.restore();
 }
 
-/** 숫자처럼 보이는 입력인지. 숫자는 오른쪽, 나머지는 왼쪽에 붙인다. (값 해석 규칙은 수식 Step에서 정한다) */
-export function looksLikeNumber(input: string): boolean {
-  return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(input);
+/** 값 종류에 따른 글자 정렬. 숫자는 오른쪽, 글자는 왼쪽, 논리값과 에러는 가운데다. (Excel과 같음) */
+export function valueAlign(value: CellValue): "left" | "center" | "right" {
+  if (typeof value === "number") return "right";
+  if (typeof value === "boolean" || value instanceof FormulaError) return "center";
+  return "left";
 }
 
 function drawSelectionFill(ctx: CanvasRenderingContext2D, { layout, viewport, selection }: RenderState): void {
@@ -96,24 +102,27 @@ function drawGridLines(ctx: CanvasRenderingContext2D, { sheet, layout, viewport 
   ctx.stroke();
 }
 
-function drawCellText(ctx: CanvasRenderingContext2D, { sheet, layout, viewport }: RenderState): void {
+function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine, layout, viewport }: RenderState): void {
   const range = visibleRange(layout, viewport, sheet);
   ctx.font = THEME.font;
   ctx.fillStyle = THEME.text;
   ctx.textBaseline = "middle";
   for (let row = range.top; row <= range.bottom; row++) {
     for (let col = range.left; col <= range.right; col++) {
-      const input = sheet.get({ row, col });
-      if (input === "") continue;
+      const value = engine.getValue({ row, col });
+      const text = formatValue(value);
+      if (text === "") continue;
       const rect = cellRect(layout, viewport, { row, col });
-      const right = looksLikeNumber(input);
+      const align = valueAlign(value);
+      const x =
+        align === "left" ? rect.x + CELL_PADDING : align === "right" ? rect.x + rect.width - CELL_PADDING : rect.x + rect.width / 2;
       // 글자가 칸을 넘치면 잘라낸다. (옆 칸으로 넘쳐 보이게 하는 건 나중에)
       ctx.save();
       ctx.beginPath();
       ctx.rect(rect.x, rect.y, rect.width, rect.height);
       ctx.clip();
-      ctx.textAlign = right ? "right" : "left";
-      ctx.fillText(input, right ? rect.x + rect.width - CELL_PADDING : rect.x + CELL_PADDING, rect.y + rect.height / 2);
+      ctx.textAlign = align;
+      ctx.fillText(text, x, rect.y + rect.height / 2);
       ctx.restore();
     }
   }

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { parseA1 } from "./address";
 import type { GridLayout, Viewport } from "./layout";
-import { drawGrid, looksLikeNumber } from "./render";
+import { FormulaEngine } from "./formula-engine";
+import { drawGrid } from "./render";
 import { selectCell } from "./selection";
 import { Sheet } from "./sheet";
 
@@ -39,9 +40,9 @@ const viewport = (scrollLeft = 0, scrollTop = 0): Viewport => ({ scrollLeft, scr
 
 function cellTexts(sheet: Sheet, view: Viewport) {
   const { ctx, texts } = recordingContext();
-  drawGrid(ctx, { sheet, selection: selectCell(parseA1("A1")!), layout, viewport: view });
-  // 머리글 글자는 가운데 정렬이므로 빼고 셀 글자만 본다.
-  return texts.filter((t) => t.align !== "center");
+  drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), layout, viewport: view });
+  // 머리글 글자는 빼고 셀 영역 글자만 본다.
+  return texts.filter((t) => t.x > layout.headerWidth && t.y > layout.headerHeight);
 }
 
 describe("셀 글자 그리기", () => {
@@ -63,36 +64,36 @@ describe("셀 글자 그리기", () => {
     expect(cellTexts(sheet, viewport()).map((t) => t.text)).toEqual(["a", "b"]);
   });
 
-  test("숫자는 오른쪽, 글자는 왼쪽에 붙여 그린다", () => {
-    const sheet = new Sheet({ rowCount: 10, colCount: 10, data: [["이름", "12"]] });
+  test("숫자는 오른쪽, 글자는 왼쪽, 논리값과 에러는 가운데에 그린다", () => {
+    const sheet = new Sheet({ rowCount: 10, colCount: 10, data: [["이름", "12", "true", "=1/0"]] });
 
-    const [name, score] = cellTexts(sheet, viewport());
+    const [name, score, flag, error] = cellTexts(sheet, viewport());
 
     expect(name).toMatchObject({ text: "이름", align: "left", x: 30 + 4 });
     expect(score).toMatchObject({ text: "12", align: "right", x: 30 + 20 + 20 - 4 });
+    expect(flag).toMatchObject({ text: "TRUE", align: "center", x: 30 + 40 + 10 });
+    expect(error).toMatchObject({ text: "#DIV/0!", align: "center", x: 30 + 60 + 10 });
+  });
+
+  test("수식 셀은 입력한 글자 대신 계산값을 그린다", () => {
+    const sheet = new Sheet({ rowCount: 10, colCount: 10, data: [["1", "2", "=A1+B1", "=SUM(A1:B1)&\"개\""]] });
+
+    expect(cellTexts(sheet, viewport()).map((t) => t.text)).toEqual(["1", "2", "3", "3개"]);
+  });
+
+  test("작은따옴표로 시작한 숫자는 글자로 왼쪽에 그린다", () => {
+    const sheet = new Sheet({ rowCount: 10, colCount: 10, data: [["'007"]] });
+
+    expect(cellTexts(sheet, viewport())[0]).toMatchObject({ text: "007", align: "left" });
   });
 
   test("머리글에 보이는 열 이름과 행 번호를 그린다", () => {
     const { ctx, texts } = recordingContext();
     const sheet = new Sheet({ rowCount: 100, colCount: 10 });
 
-    drawGrid(ctx, { sheet, selection: selectCell(parseA1("A1")!), layout, viewport: viewport(40, 100) });
+    drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), layout, viewport: viewport(40, 100) });
 
     const headers = texts.filter((t) => t.align === "center").map((t) => t.text);
     expect(headers).toEqual(["C", "D", "E", "F", "G", "11", "12", "13", "14", "15"]);
-  });
-});
-
-describe("숫자처럼 보이는 입력", () => {
-  test("정수, 소수, 부호, 지수 표기는 숫자로 본다", () => {
-    for (const input of ["0", "12", "-3", "+4", "1.5", ".5", "5.", "1e3", "2.5E-2"]) {
-      expect(looksLikeNumber(input), input).toBe(true);
-    }
-  });
-
-  test("글자, 빈 칸이 섞인 입력, 수식은 숫자로 보지 않는다", () => {
-    for (const input of ["", "abc", "12a", " 12", "1 2", "=1+2", "-", ".", "1e"]) {
-      expect(looksLikeNumber(input), input).toBe(false);
-    }
   });
 });

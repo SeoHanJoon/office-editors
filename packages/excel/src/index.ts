@@ -12,7 +12,6 @@ export {
 } from "./address";
 export type { EditMode } from "./edit-keys";
 export { FormulaEngine, type FormulaChangeListener } from "./formula-engine";
-export { FormulaSyntaxError, parseFormula } from "./formula-parser";
 export { FormulaError, formatValue, type CellValue, type ErrorCode } from "./formula-value";
 export { GridView, type GridViewOptions } from "./grid-view";
 export { DEFAULT_LAYOUT, type GridLayout } from "./layout";
