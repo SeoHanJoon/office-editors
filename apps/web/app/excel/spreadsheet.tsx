@@ -30,6 +30,11 @@ export interface ExcelTestHandle {
     problem: string | null;
     /** 처음 열 때 수식을 나눠서 계산하는 중인지 (ADR 0024) */
     calculating: boolean;
+    /** 복사하거나 잘라내서 점선이 그려진 범위 ("A1:C2"), 없으면 null */
+    copied: string | null;
+    /** 시트 크기 */
+    rowCount: number;
+    colCount: number;
   };
   /** 셀("B3")에 입력된 글자. 수식이면 "=A1+1"처럼 수식 그대로. 빈 셀이면 "" */
   cell(a1: string): string;
@@ -69,6 +74,9 @@ export function Spreadsheet() {
           editing: view.editMode,
           problem: view.problem,
           calculating: engine.calculating,
+          copied: view.copiedRange && rangeToA1(view.copiedRange),
+          rowCount: sheet.rowCount,
+          colCount: sheet.colCount,
         }),
         cell: (a1) => sheet.get(address(a1)),
         value: (a1) => formatValue(engine.getValue(address(a1))),

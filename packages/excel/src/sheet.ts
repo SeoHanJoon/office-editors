@@ -1,4 +1,15 @@
 import { MAX_COLS, MAX_ROWS, cellKey, keyToAddress, toA1, type CellAddress } from "./address";
+import { rewriteFormula, structureMapping } from "./formula-references";
+import { isFormula } from "./formula-value";
+import { mapLine, type StructureChange } from "./structure";
+
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const STRIDE = MAX_COLS;
+const lineAfter = mapLine;
+const formulaInput = isFormula;
+const rewrite = rewriteFormula;
+const addressOf = keyToAddress;
+const keyOf = cellKey;
 
 export interface SheetOptions {
   /** 행 수. 1 이상 MAX_ROWS 이하 */
@@ -19,15 +30,30 @@ export interface CellChange {
 export type SheetChangeListener = (addresses: readonly CellAddress[]) => void;
 
 /**
+ * 행·열을 넣거나 지운 뒤 불린다. addresses는 옮기고 참조를 고친 뒤 따로 값이 바뀐 셀이다. (변경 뒤 주소)
+ * 옮겨지기만 했거나 참조만 규칙대로 고쳐진 셀은 들어 있지 않다. (듣는 쪽이 같은 규칙으로 따라갈 수 있다)
+ */
+export type StructureChangeListener = (change: StructureChange, addresses: readonly CellAddress[]) => void;
+
+/** changeStructure가 없애거나 고친 것. 되돌릴 때 쓴다. */
+export interface StructureResult {
+  /** 지운 줄에 있던 셀 (변경 전 주소와 값) */
+  readonly removed: readonly CellChange[];
+  /** 참조를 고친 수식 셀 (변경 뒤 주소와 고치기 전 글자) */
+  readonly rewritten: readonly CellChange[];
+}
+
+/**
  * 시트 한 장의 셀 값. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
  * 값이 있는 셀만 Map에 넣으므로 빈 셀은 메모리를 쓰지 않는다.
  */
 export class Sheet {
-  readonly rowCount: number;
-  readonly colCount: number;
+  private rows: number;
+  private cols: number;
   /** 키는 cellKey(주소). 값은 빈 문자열이 아니다. */
-  private readonly cells = new Map<number, string>();
+  private cells = new Map<number, string>();
   private readonly listeners = new Set<SheetChangeListener>();
+  private readonly structureListeners = new Set<StructureChangeListener>();
 
   constructor({ rowCount, colCount, data = [] }: SheetOptions) {
     assertCount("rowCount", rowCount, MAX_ROWS);
@@ -35,13 +61,23 @@ export class Sheet {
     if (data.length > rowCount || data.some((row) => row.length > colCount)) {
       throw new RangeError(`data가 시트 크기(${rowCount}행 × ${colCount}열)보다 크다`);
     }
-    this.rowCount = rowCount;
-    this.colCount = colCount;
+    this.rows = rowCount;
+    this.cols = colCount;
     data.forEach((values, row) => {
       values.forEach((value, col) => {
         if (value !== "") this.cells.set(cellKey({ row, col }), value);
       });
     });
+  }
+
+  /** 행 수. 행을 넣고 지우면 바뀐다. */
+  get rowCount(): number {
+    return this.rows;
+  }
+
+  /** 열 수. 열을 넣고 지우면 바뀐다. */
+  get colCount(): number {
+    return this.cols;
   }
 
   /** 값이 있는 셀 수 */
@@ -90,9 +126,86 @@ export class Sheet {
     return () => this.listeners.delete(listener);
   }
 
-  private contains({ row, col }: CellAddress): boolean {
-    return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0 && row < this.rowCount && col < this.colCount;
+  /**
+   * 행·열을 넣거나 지운다. 뒤쪽 셀을 옮기고, 모든 수식의 참조를 Excel처럼 고친다. (structureMapping)
+   * 시트 크기도 넣은 만큼 늘고 지운 만큼 줄어든다.
+   * 그다음 cells를 넣는다. (변경 뒤 주소. 되돌릴 때 지운 셀과 고치기 전 수식을 되살리는 데 쓴다)
+   * 알림은 onStructureChange로 한 번만 간다. onChange는 부르지 않는다.
+   *
+   * 편집은 StructureCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
+   * 넣을 자리·지울 줄이 시트 밖이거나, 시트가 최대 크기를 넘거나 비게 되거나, cells가 새 크기 밖이면 아무것도 바꾸지 않고 RangeError를 던진다.
+   */
+  changeStructure(change: StructureChange, cells: readonly CellChange[] = []): StructureResult {
+    const byRow = change.axis === "row";
+    const size = byRow ? this.rows : this.cols;
+    const max = byRow ? MAX_ROWS : MAX_COLS;
+    const { index, count } = change;
+    const newSize = change.kind === "insert" ? size + count : size - count;
+    if (!Number.isInteger(index) || !Number.isInteger(count) || count < 1 || index < 0) {
+      throw new RangeError(`잘못된 행·열 변경이다: ${JSON.stringify(change)}`);
+    }
+    if (change.kind === "insert" ? index > size || newSize > max : index + count > size || newSize < 1) {
+      throw new RangeError(`시트(${this.rows}행 × ${this.cols}열)에서 할 수 없는 행·열 변경이다: ${JSON.stringify(change)}`);
+    }
+    const rows = byRow ? newSize : this.rows;
+    const cols = byRow ? this.cols : newSize;
+    for (const { address } of cells) {
+      if (!inBounds(address, rows, cols)) throw new RangeError(`변경 뒤 시트 밖의 셀이다: ${toA1(address)}`);
+    }
+
+    const mapping = structureMapping(change);
+    const next = new Map<number, string>();
+    const removed: CellChange[] = [];
+    const rewritten: CellChange[] = [];
+    // 셀이 수십만 개라 주소 객체는 없어지거나 고친 셀에만 만든다.
+    for (const [key, value] of this.cells) {
+      const row = Math.floor(key / STRIDE);
+      const col = key - row * STRIDE;
+      const line = lineAfter(change, byRow ? row : col);
+      if (line === null) {
+        removed.push({ address: { row, col }, value });
+        continue;
+      }
+      const nextKey = byRow ? line * STRIDE + col : row * STRIDE + line;
+      if (!formulaInput(value)) {
+        next.set(nextKey, value);
+        continue;
+      }
+      const text = rewrite(value, mapping);
+      if (text !== value) rewritten.push({ address: addressOf(nextKey), value });
+      next.set(nextKey, text);
+    }
+
+    // 옮기고 고친 결과와 같은 값은 넣지 않고 알리지도 않는다.
+    const changed: CellAddress[] = [];
+    for (const { address, value } of cells) {
+      const key = keyOf(address);
+      if ((next.get(key) ?? "") === value) continue;
+      if (value === "") next.delete(key);
+      else next.set(key, value);
+      changed.push(address);
+    }
+
+    this.cells = next;
+    this.rows = rows;
+    this.cols = cols;
+    for (const listener of this.structureListeners) listener(change, changed);
+    return { removed, rewritten };
   }
+
+  /** 행·열을 넣거나 지울 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
+  onStructureChange(listener: StructureChangeListener): () => void {
+    this.structureListeners.add(listener);
+    return () => this.structureListeners.delete(listener);
+  }
+
+  private contains(address: CellAddress): boolean {
+    return inBounds(address, this.rows, this.cols);
+  }
+}
+
+function inBounds({ row, col }: CellAddress, rows: number, cols: number): boolean {
+  return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && col >= 0 && row < rows && col < cols;
 }
 
 function assertCount(name: string, value: number, max: number): void {

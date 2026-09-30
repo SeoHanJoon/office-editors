@@ -10,6 +10,8 @@ export interface RenderState {
   /** 셀에 보여줄 계산값 */
   readonly engine: FormulaEngine;
   readonly selection: Selection;
+  /** 복사하거나 잘라낸 범위. 점선 테두리를 그린다. 없으면 null */
+  readonly copied?: CellRange | null;
   readonly layout: GridLayout;
   readonly viewport: Viewport;
 }
@@ -145,11 +147,17 @@ function drawPending(ctx: CanvasRenderingContext2D, rect: Rect): void {
   ctx.fillStyle = THEME.text;
 }
 
-function drawSelectionBorder(ctx: CanvasRenderingContext2D, { layout, viewport, selection }: RenderState): void {
+function drawSelectionBorder(ctx: CanvasRenderingContext2D, { layout, viewport, selection, copied }: RenderState): void {
   const area = rangeRect(layout, viewport, selectionRange(selection));
   ctx.lineWidth = 2;
   ctx.strokeStyle = THEME.selectionBorder;
   ctx.strokeRect(Math.round(area.x), Math.round(area.y), area.width, area.height);
+  if (!copied) return;
+  // 복사한 범위: Excel처럼 점선 (움직이지는 않는다)
+  const copy = rangeRect(layout, viewport, copied);
+  ctx.setLineDash([4, 3]);
+  ctx.strokeRect(Math.round(copy.x), Math.round(copy.y), copy.width, copy.height);
+  ctx.setLineDash([]);
 }
 
 function drawHeaders(ctx: CanvasRenderingContext2D, { sheet, layout, viewport, selection }: RenderState): void {

@@ -17,4 +17,13 @@ export { GridView, type GridViewOptions } from "./grid-view";
 export { DEFAULT_LAYOUT, type GridLayout } from "./layout";
 export { selectCell, selectRange, selectionRange, type Selection } from "./selection";
 export { SetCellsCommand } from "./set-cells-command";
-export { Sheet, type CellChange, type SheetChangeListener, type SheetOptions } from "./sheet";
+export {
+  Sheet,
+  type CellChange,
+  type SheetChangeListener,
+  type SheetOptions,
+  type StructureChangeListener,
+  type StructureResult,
+} from "./sheet";
+export type { StructureChange } from "./structure";
+export { StructureCommand } from "./structure-command";

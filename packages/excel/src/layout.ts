@@ -78,6 +78,21 @@ export function isInHeader(layout: GridLayout, x: number, y: number): boolean {
   return x < layout.headerWidth || y < layout.headerHeight;
 }
 
+/** 화면 좌표 아래의 행 머리글(행 번호) 또는 열 머리글(열 이름). 머리글이 아니거나 왼쪽 위 모서리면 null */
+export function pointToHeader(
+  layout: GridLayout,
+  viewport: Viewport,
+  bounds: SheetBounds,
+  x: number,
+  y: number,
+): { axis: "row" | "col"; index: number } | null {
+  const inRowHeader = x < layout.headerWidth;
+  const inColHeader = y < layout.headerHeight;
+  if (inRowHeader === inColHeader) return null;
+  const cell = pointToCell(layout, viewport, bounds, x, y);
+  return inRowHeader ? { axis: "row", index: cell.row } : { axis: "col", index: cell.col };
+}
+
 /**
  * 화면 좌표 아래의 셀. 시트 밖이면 가장 가까운 셀로 잘라 넣는다.
  * 드래그가 머리글이나 화면 밖으로 나가면 보이는 범위 바로 바깥 셀이 되어, 그 셀이 보이도록 스크롤하면 표가 따라 움직인다.

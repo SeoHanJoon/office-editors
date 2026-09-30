@@ -453,3 +453,205 @@ test.describe("수식", () => {
     expect(await value(page, "L2")).toBe("6");
   });
 });
+
+test.describe("복사/붙여넣기", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
+  const readClipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+  const writeClipboard = (page: Page, text: string) => page.evaluate((text) => navigator.clipboard.writeText(text), text);
+
+  test("범위를 복사하면 클립보드에 Excel처럼 탭과 줄바꿈으로 나눈 보이는 값이 들어가고 점선이 그려진다", async ({ page }) => {
+    await clickCell(page, "E1");
+    await clickCell(page, "G3", { shift: true });
+    await page.keyboard.press("ControlOrMeta+c");
+
+    const shown = await page.evaluate(() =>
+      ["E", "F", "G"].map((column) => [1, 2, 3].map((row) => window.__excel!.value(`${column}${row}`))),
+    );
+    const rows = [0, 1, 2].map((row) => shown.map((column) => column[row]).join("\t"));
+    // G열은 수식(=SUM)이지만 클립보드에는 계산값이 들어간다.
+    expect(await readClipboard(page)).toBe(rows.map((row) => `${row}\r\n`).join(""));
+    expect((await state(page)).copied).toBe("E1:G3");
+
+    // Esc를 누르면 점선이 사라진다.
+    await page.keyboard.press("Escape");
+    expect((await state(page)).copied).toBeNull();
+  });
+
+  test("수식을 복사해 붙여넣으면 상대 참조가 옮긴 만큼 따라가고, 여러 번 붙일 수 있다", async ({ page }) => {
+    await clickCell(page, "G2"); // =SUM(D2:F2)
+    await page.keyboard.press("ControlOrMeta+c");
+
+    await clickCell(page, "L3");
+    await page.keyboard.press("ControlOrMeta+v");
+    expect(await cell(page, "L3")).toBe("=SUM(I3:K3)");
+
+    // 범위를 고르고 붙이면 범위 전체에 채운다. 점선은 남아 있다.
+    await clickCell(page, "G5");
+    await clickCell(page, "G7", { shift: true });
+    await page.keyboard.press("ControlOrMeta+v");
+    expect(await cell(page, "G6")).toBe("=SUM(D6:F6)");
+    expect((await state(page)).copied).toBe("G2");
+    expect((await state(page)).selection).toBe("G5:G7");
+  });
+
+  test("Excel에서 복사한 글자를 붙여넣으면 칸마다 들어가고, 한 번에 되돌린다", async ({ page }) => {
+    // Excel이 클립보드에 넣는 모양: 탭·CRLF, 셀 안 줄바꿈은 큰따옴표로 감쌈, 마지막 줄 뒤에도 CRLF
+    await writeClipboard(page, '10\t20\t=L2+M2\r\n"여러\n줄"\t\t한글\r\n');
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+v");
+
+    expect(await Promise.all(["L2", "M2", "N2", "L3", "M3", "N3"].map((a1) => cell(page, a1)))).toEqual([
+      "10",
+      "20",
+      "=L2+M2",
+      "여러\n줄",
+      "",
+      "한글",
+    ]);
+    expect(await value(page, "N2")).toBe("30");
+    expect((await state(page)).selection).toBe("L2:N3");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await Promise.all(["L2", "N2", "L3", "N3"].map((a1) => cell(page, a1)))).toEqual(["", "", "", ""]);
+  });
+
+  test("잘라내 붙여넣으면 셀이 옮겨지고, 옮긴 셀을 가리키던 수식이 따라간다", async ({ page }) => {
+    const scores = await Promise.all(["D2", "E2", "F2"].map((a1) => cell(page, a1)));
+    const total = await value(page, "G2");
+
+    await clickCell(page, "D2");
+    await clickCell(page, "F2", { shift: true });
+    await page.keyboard.press("ControlOrMeta+x");
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+v");
+
+    expect(await Promise.all(["L2", "M2", "N2"].map((a1) => cell(page, a1)))).toEqual(scores);
+    expect(await cell(page, "D2")).toBe("");
+    expect(await cell(page, "G2")).toBe("=SUM(L2:N2)");
+    expect(await value(page, "G2")).toBe(total);
+    // 잘라낸 것은 한 번만 붙인다.
+    expect((await state(page)).copied).toBeNull();
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cell(page, "D2")).toBe(scores[0]);
+    expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
+  });
+
+  test("입력 중에는 입력창 안에서 글자를 붙여넣는다", async ({ page }) => {
+    await writeClipboard(page, "붙인 글자");
+    await clickCell(page, "L2");
+    await page.keyboard.press("F2");
+    await page.keyboard.press("ControlOrMeta+v");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "L2")).toBe("붙인 글자");
+    expect(await cell(page, "M2")).toBe("");
+  });
+});
+
+test.describe("행·열 삽입/삭제", () => {
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
+
+  /** 스크롤하지 않은 표에서 행 번호(3) 또는 열 이름("C") 머리글을 누른다. */
+  async function clickHeader(page: Page, header: number | string, { shift = false } = {}) {
+    const box = (await grid(page).boundingBox())!;
+    const point =
+      typeof header === "number"
+        ? { x: box.x + HEADER_WIDTH / 2, y: box.y + HEADER_HEIGHT + (header - 1) * ROW_HEIGHT + ROW_HEIGHT / 2 }
+        : { x: box.x + HEADER_WIDTH + (header.charCodeAt(0) - 65) * COL_WIDTH + COL_WIDTH / 2, y: box.y + HEADER_HEIGHT / 2 };
+    if (shift) await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    if (shift) await page.keyboard.up("Shift");
+    return point;
+  }
+
+  const insert = (page: Page) => page.keyboard.press("ControlOrMeta+Shift+Equal");
+  const remove = (page: Page) => page.keyboard.press("ControlOrMeta+Minus");
+
+  test("행 번호를 누르면 행 전체를, 열 이름을 누르면 열 전체를 고르고, Shift와 드래그로 늘린다", async ({ page }) => {
+    await clickHeader(page, 3);
+    expect((await state(page)).selection).toBe("A3:AX3");
+    await expect(nameBox(page)).toHaveValue("A3");
+
+    await clickHeader(page, 5, { shift: true });
+    expect((await state(page)).selection).toBe("A3:AX5");
+
+    const from = await clickHeader(page, "C");
+    expect((await state(page)).selection).toBe("C1:C100000");
+    await expect(nameBox(page)).toHaveValue("C1");
+
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + COL_WIDTH * 2, from.y, { steps: 4 });
+    await page.mouse.up();
+    expect((await state(page)).selection).toBe("C1:E100000");
+  });
+
+  test("행을 골라 Ctrl+Shift+=를 누르면 새 행이 들어가고 아래 수식 참조가 밀리며, 한 번에 되돌린다", async ({ page }) => {
+    const total = await value(page, "K1");
+    const first = await Promise.all(["A2", "G2"].map((a1) => cell(page, a1)));
+
+    // 셀 범위만 고른 채 누르면 아무것도 하지 않는다. (Excel은 대화상자를 띄운다)
+    await clickCell(page, "B2");
+    await insert(page);
+    expect((await state(page)).rowCount).toBe(100_000);
+
+    await clickHeader(page, 2);
+    await insert(page);
+
+    expect((await state(page)).rowCount).toBe(100_001);
+    expect((await state(page)).selection).toBe("A2:AX2");
+    expect(await cell(page, "A2")).toBe("");
+    expect(await Promise.all(["A3", "G3"].map((a1) => cell(page, a1)))).toEqual([first[0], "=SUM(D3:F3)"]);
+    expect(await cell(page, "K1")).toBe("=SUM(G3:G100001)");
+    expect(await value(page, "K1")).toBe(total);
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect((await state(page)).rowCount).toBe(100_000);
+    expect(await Promise.all(["A2", "G2"].map((a1) => cell(page, a1)))).toEqual(first);
+    expect(await cell(page, "K1")).toBe("=SUM(G2:G100000)");
+  });
+
+  test("행을 지우면 그 행을 가리키던 수식은 #REF!가 되고, 합계 범위는 줄어든다", async ({ page }) => {
+    await clickCell(page, "L2");
+    await page.keyboard.type("=G3*2");
+    await page.keyboard.press("Enter");
+    const total = Number(await value(page, "K1"));
+    const removed = Number(await value(page, "G3"));
+
+    await clickHeader(page, 3);
+    await remove(page);
+
+    expect((await state(page)).rowCount).toBe(99_999);
+    expect(await cell(page, "L2")).toBe("=#REF!*2");
+    expect(await value(page, "L2")).toBe("#REF!");
+    expect(await cell(page, "K1")).toBe("=SUM(G2:G99999)");
+    expect(Number(await value(page, "K1"))).toBe(total - removed);
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cell(page, "L2")).toBe("=G3*2");
+    expect(Number(await value(page, "L2"))).toBe(removed * 2);
+    expect((await state(page)).selection).toBe("A3:AX3");
+  });
+
+  test("열을 골라 넣으면 범위 안쪽에 들어간 열만큼 수식 범위가 늘어난다", async ({ page }) => {
+    const total = await value(page, "G2");
+
+    await clickHeader(page, "E");
+    await insert(page);
+
+    expect((await state(page)).colCount).toBe(51);
+    expect((await state(page)).selection).toBe("E1:E100000");
+    expect(await cell(page, "H2")).toBe("=SUM(D2:G2)");
+    expect(await value(page, "H2")).toBe(total);
+    expect(await cell(page, "L1")).toBe("=SUM(H2:H100000)");
+
+    await remove(page);
+    expect((await state(page)).colCount).toBe(50);
+    expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
+  });
+});

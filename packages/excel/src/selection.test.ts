@@ -1,18 +1,50 @@
 import { describe, expect, test } from "vitest";
 import { parseA1, toA1 } from "./address";
 import {
+  clampSelection,
   cycleInRange,
   extendTo,
   moveBy,
   moveToDataEdge,
   selectCell,
+  selectColumns,
   selectRange,
+  selectRows,
   selectionRange,
+  wholeLines,
   type Selection,
 } from "./selection";
 import { Sheet } from "./sheet";
 
 const at = (a1: string) => parseA1(a1)!;
+
+describe("행·열 전체 선택", () => {
+  const bounds = { rowCount: 100, colCount: 10 };
+
+  test("행 전체를 고르면 A열부터 끝 열까지이고 활성 셀은 첫 행의 A열이다", () => {
+    const selection = selectRows(4, 2, bounds);
+    expect(selectionRange(selection)).toEqual({ top: 2, left: 0, bottom: 4, right: 9 });
+    expect(toA1(selection.active)).toBe("A5");
+  });
+
+  test("열 전체를 고르면 1행부터 끝 행까지이고 활성 셀은 첫 열의 1행이다", () => {
+    const selection = selectColumns(1, 3, bounds);
+    expect(selectionRange(selection)).toEqual({ top: 0, left: 1, bottom: 99, right: 3 });
+    expect(toA1(selection.active)).toBe("B1");
+  });
+
+  test("행 전체인지 열 전체인지 알아본다", () => {
+    expect(wholeLines(selectionRange(selectRows(2, 3, bounds)), bounds)).toBe("row");
+    expect(wholeLines(selectionRange(selectColumns(2, 3, bounds)), bounds)).toBe("col");
+    expect(wholeLines({ top: 0, left: 0, bottom: 99, right: 9 }, bounds)).toBe("row");
+    expect(wholeLines({ top: 0, left: 0, bottom: 5, right: 5 }, bounds)).toBeNull();
+  });
+
+  test("시트가 줄면 선택을 시트 안으로 잘라 넣는다", () => {
+    const selection = clampSelection(selectRows(95, 99, bounds), { rowCount: 96, colCount: 10 });
+    expect(selectionRange(selection)).toEqual({ top: 95, left: 0, bottom: 95, right: 9 });
+  });
+});
 
 describe("선택 범위", () => {
   test("셀 하나를 선택하면 그 셀 하나가 범위다", () => {

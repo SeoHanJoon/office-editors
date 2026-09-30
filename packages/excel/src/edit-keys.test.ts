@@ -45,6 +45,20 @@ describe("입력 중이 아닐 때", () => {
     expect(action("Delete", null)).toBe("clear");
     expect(action("Backspace", null)).toBe("clearAndEnter");
     expect(action("F2", null)).toBe("edit");
+    expect(action("Escape", null)).toBe("cancel");
+  });
+
+  test("Ctrl+Shift+=와 Ctrl+숫자패드 +는 행·열 삽입, Ctrl+-는 행·열 삭제다", () => {
+    const plus = { key: "+", code: "Equal", shiftKey: true, ctrlKey: true, metaKey: false, altKey: false };
+    expect(editAction(plus, null)).toBe("insertLines");
+    // 자판에 따라 Shift+=의 key가 "="로 올 수 있다.
+    expect(action("Shift+Meta+=", null, "Equal")).toBe("insertLines");
+    expect(editAction({ ...plus, shiftKey: false, code: "NumpadAdd" }, null)).toBe("insertLines");
+    expect(action("Control+-", null, "Minus")).toBe("deleteLines");
+    expect(action("Meta+-", null, "NumpadSubtract")).toBe("deleteLines");
+    // 입력 중에는 입력창에 맡긴다.
+    expect(editAction(plus, "enter")).toBeNull();
+    expect(action("Control+-", "edit", "Minus")).toBeNull();
   });
 
   test("나머지 키는 이동 키인지 navigate에 묻는다", () => {
