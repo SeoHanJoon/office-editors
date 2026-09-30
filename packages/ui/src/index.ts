@@ -1,3 +1,10 @@
 export const packageName = "@office/ui";
 
-export type { ContextMenuEntry, ContextMenuItem } from "./context-menu";
+export {
+  ContextMenu,
+  nextEnabled,
+  placeMenu,
+  type ContextMenuEntry,
+  type ContextMenuItem,
+  type ContextMenuOptions,
+} from "./context-menu";
