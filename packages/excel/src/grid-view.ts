@@ -793,10 +793,10 @@ export class GridView {
 
   /**
    * 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다.
-   * 열 너비가 바뀌면 자동 줄바꿈 셀의 줄 수가 바뀌므로 자동 행 높이를 다시 잰다.
+   * 자동 줄바꿈 칸이 있는 열의 너비가 바뀌면 줄 수가 바뀌므로 자동 행 높이를 다시 잰다.
    */
-  private readonly onCustomSizeChange = (axis: Axis): void => {
-    if (axis === "col" && this.sheet.hasFormats) this.autoRows.rebuild();
+  private readonly onCustomSizeChange = (axis: Axis, indexes: readonly number[]): void => {
+    if (axis === "col" && this.autoRows.wrapsIn(indexes)) this.autoRows.rebuild();
     this.updateGeometry();
     this.placeEditor();
     this.requestRender();

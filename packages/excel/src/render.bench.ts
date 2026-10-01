@@ -76,3 +76,31 @@ test("행마다 높이가 다른 10만 행 한 화면 그리기 (1280×800)", as
     drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 }, fillHandle: true });
   }).run();
 });
+
+test("서식이 있는 10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) => {
+  const sheet = scoreSheet();
+  const engine = new FormulaEngine(sheet);
+  // 제목 행 굵게·채우기, A~H열 모든 테두리, H열 숫자 형식, C열 글자색 (모두 줄 서식이라 보이는 칸마다 서식을 찾는다)
+  sheet.setFormats({
+    rows: [{ index: 0, format: { bold: true, fill: "#d9d9d9", align: "center" } }],
+    cols: [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        index,
+        format: { borderTop: true, borderRight: true, borderBottom: true, borderLeft: true } as const,
+      })),
+      { index: 7, format: { borderTop: true, borderRight: true, borderBottom: true, borderLeft: true, numberFormat: { kind: "number", decimals: 2 } } },
+      { index: 2, format: { borderTop: true, borderRight: true, borderBottom: true, borderLeft: true, color: "#c00000" } },
+    ],
+  });
+  const ctx = fakeContext();
+  const layout = DEFAULT_LAYOUT;
+  const geometry = uniformGeometry(layout, sheet);
+  const selection = selectCell({ row: 0, col: 0 });
+  const step = 37 * layout.rowHeight;
+  const maxTop = PERF_ROWS * layout.rowHeight;
+  let scrollTop = 0;
+  await bench("drawGrid 한 번 (서식 있음)", () => {
+    scrollTop = (scrollTop + step) % maxTop;
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 }, fillHandle: true });
+  }).run();
+});

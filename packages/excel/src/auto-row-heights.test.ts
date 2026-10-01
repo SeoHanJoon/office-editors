@@ -142,3 +142,22 @@ describe("행마다 자동 높이: 서식", () => {
     expect(auto.updateValues([at("A1")])).toBe(false);
   });
 });
+
+describe("열 너비가 바뀔 때 다시 잴지", () => {
+  test("바꾼 열에 자동 줄바꿈 칸이 있을 때만 true다", () => {
+    const sheet = new Sheet({ rowCount: 3, colCount: 4 });
+    const auto = autoRows(sheet);
+    expect(auto.wrapsIn([0])).toBe(false);
+
+    sheet.setFormats({ cells: [{ address: at("B2"), format: { wrap: true } }], cols: [{ index: 2, format: { bold: true } }] });
+    expect(auto.wrapsIn([0, 2])).toBe(false);
+    expect(auto.wrapsIn([1])).toBe(true);
+
+    sheet.setFormats({ cols: [{ index: 3, format: { wrap: true } }] });
+    expect(auto.wrapsIn([3])).toBe(true);
+
+    // 행 서식의 자동 줄바꿈은 모든 열에 걸친다.
+    sheet.setFormats({ rows: [{ index: 0, format: { wrap: true } }] });
+    expect(auto.wrapsIn([0])).toBe(true);
+  });
+});

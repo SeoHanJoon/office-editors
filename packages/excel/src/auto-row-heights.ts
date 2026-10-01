@@ -120,6 +120,20 @@ export class AutoRowHeights {
     return this.update(addresses.filter((address) => this.sheet.format(address).wrap));
   }
 
+  /**
+   * cols 중에 자동 줄바꿈인 칸이 있을 수 있는지. 열 너비가 바뀌었을 때 다시 잴지 정한다.
+   * 열 서식, 행 서식, 그 열의 셀 서식 중 하나라도 자동 줄바꿈이면 true다.
+   */
+  wrapsIn(cols: readonly number[]): boolean {
+    const { sheet } = this;
+    if (!sheet.hasFormats) return false;
+    if (cols.some((col) => sheet.lineFormat("col", col)?.wrap)) return true;
+    for (const [, format] of sheet.lineFormats("row")) if (format.wrap) return true;
+    const set = new Set(cols);
+    for (const [address, format] of sheet.cellFormats()) if (format.wrap && set.has(address.col)) return true;
+    return false;
+  }
+
   /** 행의 자동 높이. 기본 높이보다 높은 셀이 없으면 기본 높이 */
   height(row: number): number {
     return this.maxHeights.get(row) ?? this.defaultHeight;
