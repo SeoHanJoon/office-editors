@@ -14,6 +14,7 @@ import {
 import { editAction, type EditMode } from "./edit-keys";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
+import { formatValue } from "./formula-value";
 import { gridMenu, type GridMenuCommand, type GridMenuTarget } from "./grid-menu";
 import { navigate } from "./keyboard";
 import {
@@ -31,7 +32,8 @@ import {
   type GridLayout,
   type Viewport,
 } from "./layout";
-import { CELL_FONT, drawGrid } from "./render";
+import { CELL_FONT, CELL_PADDING, THEME, drawGrid } from "./render";
+import { draggedSize, fitColumnWidth, pointToResizeHandle, resizeLines, type ResizeHandle } from "./resize";
 import {
   clampSelection,
   expandToLines,
@@ -49,7 +51,8 @@ import {
   type Selection,
 } from "./selection";
 import { SetCellsCommand } from "./set-cells-command";
-import type { CellChange, Sheet } from "./sheet";
+import { SetLineSizesCommand } from "./set-line-sizes-command";
+import type { Axis, CellChange, LineSizeChange, Sheet } from "./sheet";
 import { canChangeStructure, type StructureChange } from "./structure";
 import { StructureCommand } from "./structure-command";
 
@@ -68,6 +71,19 @@ interface Copied {
   readonly range: CellRange;
   readonly text: string;
   readonly cut: boolean;
+}
+
+/** 머리글 경계선을 끌어 줄 크기를 바꾸는 중인 상태 */
+interface Resizing {
+  readonly pointer: number;
+  readonly handle: ResizeHandle;
+  /** 함께 바꿀 줄 [first, last] */
+  readonly first: number;
+  readonly last: number;
+  /** 누른 자리 (열은 clientX, 행은 clientY) */
+  readonly origin: number;
+  readonly startSize: number;
+  size: number;
 }
 
 /** Mac이면 단축키를 ⌘로 보여주고, Ctrl+클릭을 오른쪽 클릭으로 본다. */
@@ -95,6 +111,8 @@ function sameClipboardText(a: string, b: string): boolean {
  * 복사한 범위를 기억해 두었다가 붙여넣을 글자가 그때 넣은 글자와 같으면 수식째 붙인다. (Excel과 같은 방식)
  *
  * 오른쪽 클릭, Shift+F10, 메뉴 키로 메뉴(@office/ui의 ContextMenu)를 연다. 메뉴의 복사·붙여넣기는 Clipboard API를 쓴다. (ADR 0029)
+ *
+ * 머리글 경계선을 끌면 줄 크기를, 두 번 누르면 내용에 맞춘 크기를 SetLineSizesCommand로 바꾼다. 줄 크기는 Sheet에 있다. (ADR 0031)
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -124,6 +142,10 @@ export class GridView {
   private frame = 0;
   /** 드래그로 범위를 고르는 중이면 그 포인터 id */
   private dragPointer: number | null = null;
+  /** 경계선을 끌어 크기를 바꾸는 중이면 그 상태 */
+  private resizing: Resizing | null = null;
+  /** 글자 너비를 재는 데 쓰는 캔버스 (열 너비 자동 맞춤) */
+  private measureContext: CanvasRenderingContext2D | null = null;
   /** 드래그로 고르는 것: 셀 범위, 또는 머리글을 눌러 시작한 행·열 전체 */
   private dragKind: "cell" | "row" | "col" = "cell";
   /** 이 화면이 직접 편집을 실행하는 중인지. 그동안 온 시트 변경은 선택을 옮기지 않는다. */
@@ -207,6 +229,11 @@ export class GridView {
   /** 지금 화면에 조금이라도 보이는 셀 범위 */
   get visibleRange(): CellRange {
     return visibleRange(this.geometry, this.viewport());
+  }
+
+  /** 화면에 그리는 줄 크기 (CSS px). 직접 바꾸지 않은 줄은 기본(행은 자동) 크기다. */
+  lineSize(axis: Axis, index: number): number {
+    return (axis === "row" ? this.geometry.rows : this.geometry.cols).size(index);
   }
 
   /** 셀에 값을 입력하는 중이면 그 상태, 아니면 null */
@@ -387,6 +414,86 @@ export class GridView {
     this.select(selection, "active");
     this.requestRender();
   };
+
+  /** 경계선 위에서는 마우스 모양을 크기 조절 모양으로 바꾼다. */
+  private updateCursor(event: PointerEvent): void {
+    const point = this.localPoint(event);
+    const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
+    const cursor = handle ? (handle.axis === "col" ? "col-resize" : "row-resize") : "";
+    if (this.scroller.style.cursor !== cursor) this.scroller.style.cursor = cursor;
+  }
+
+  /** 경계선을 누르면 끌기를 시작한다. 선택은 그대로 두고, 끄는 동안은 안내선만 그린다. */
+  private startResize(event: PointerEvent, handle: ResizeHandle): void {
+    const { first, last } = resizeLines(handle, selectionRange(this.currentSelection), this.sheet);
+    const startSize = this.lineSize(handle.axis, handle.index);
+    this.resizing = {
+      pointer: event.pointerId,
+      handle,
+      first,
+      last,
+      origin: handle.axis === "col" ? event.clientX : event.clientY,
+      startSize,
+      size: startSize,
+    };
+    this.scroller.setPointerCapture(event.pointerId);
+    this.requestRender();
+  }
+
+  private moveResize(event: PointerEvent): void {
+    const resizing = this.resizing!;
+    const delta = (resizing.handle.axis === "col" ? event.clientX : event.clientY) - resizing.origin;
+    const size = draggedSize(resizing.startSize, delta);
+    if (size === resizing.size) return;
+    resizing.size = size;
+    this.requestRender();
+  }
+
+  /** 손을 떼면 함께 바꿀 줄을 모두 끈 크기로 한 번에 바꾼다. (undo 한 번) 움직이지 않았거나 취소되면 그대로 둔다. */
+  private finishResize(apply: boolean): void {
+    const { handle, first, last, size, startSize } = this.resizing!;
+    this.resizing = null;
+    this.requestRender();
+    if (!apply || size === startSize) return;
+    const changes: LineSizeChange[] = [];
+    for (let index = first; index <= last; index++) changes.push({ index, size });
+    this.history.execute(new SetLineSizesCommand(this.sheet, handle.axis, changes));
+  }
+
+  /**
+   * 경계선을 더블클릭하면 함께 바꿀 줄마다 내용에 맞춘다. (undo 한 번)
+   * 열은 그 열의 모든 행에서 가장 넓은 글자에 맞추고(비어 있으면 기본 너비), 행은 직접 바꾼 높이를 지워 자동 높이로 돌린다. (ADR 0031)
+   */
+  private autoFit(handle: ResizeHandle): void {
+    const { first, last } = resizeLines(handle, selectionRange(this.currentSelection), this.sheet);
+    const changes: LineSizeChange[] = [];
+    for (let index = first; index <= last; index++) {
+      const size = handle.axis === "col" ? this.fitColumn(index) : null;
+      if (size !== this.sheet.lineSize(handle.axis, index)) changes.push({ index, size });
+    }
+    if (changes.length > 0) this.history.execute(new SetLineSizesCommand(this.sheet, handle.axis, changes));
+  }
+
+  /** 열의 모든 행에 보이는 글자 중 가장 넓은 것에 맞춘 너비. 비어 있으면 null */
+  private fitColumn(col: number): number | null {
+    const { sheet, engine } = this;
+    if (!this.measureContext) {
+      this.measureContext = document.createElement("canvas").getContext("2d");
+      if (!this.measureContext) return null;
+    }
+    const ctx = this.measureContext;
+    ctx.font = THEME.font;
+    return fitColumnWidth(
+      sheet.rowCount,
+      (row) => {
+        const address = { row, col };
+        const input = sheet.get(address);
+        return input === "" ? null : [input, formatValue(engine.getValue(address))];
+      },
+      (text) => ctx.measureText(text).width,
+      CELL_PADDING,
+    );
+  }
 
   /** 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다. */
   private readonly onLineSizeChange = (): void => {
@@ -595,6 +702,11 @@ export class GridView {
     this.focus();
     if (!committed) return;
 
+    const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
+    if (handle) {
+      this.startResize(event, handle);
+      return;
+    }
     const header = pointToHeader(this.geometry, this.viewport(), point.x, point.y);
     if (header) {
       // 행 번호·열 이름을 누르면 줄 전체를 고른다. Shift를 누르면 고른 줄(anchor)부터 누른 줄까지다.
@@ -618,6 +730,14 @@ export class GridView {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (this.resizing) {
+      if (event.pointerId === this.resizing.pointer) this.moveResize(event);
+      return;
+    }
+    if (this.dragPointer === null) {
+      this.updateCursor(event);
+      return;
+    }
     if (event.pointerId !== this.dragPointer) return;
     const point = this.localPoint(event);
     const cell = pointToCell(this.geometry, this.viewport(), point.x, point.y);
@@ -640,14 +760,24 @@ export class GridView {
   }
 
   private readonly onPointerUp = (event: PointerEvent): void => {
+    if (this.resizing?.pointer === event.pointerId) {
+      this.finishResize(event.type === "pointerup");
+      this.scroller.releasePointerCapture(event.pointerId);
+      return;
+    }
     if (event.pointerId !== this.dragPointer) return;
     this.dragPointer = null;
     this.scroller.releasePointerCapture(event.pointerId);
   };
 
-  /** 셀을 더블클릭하면 기존 값을 고치는 "edit" 입력을 시작한다. */
+  /** 셀을 더블클릭하면 기존 값을 고치는 "edit" 입력을 시작한다. 머리글 경계선을 더블클릭하면 내용에 맞게 크기를 맞춘다. */
   private readonly onDoubleClick = (event: MouseEvent): void => {
     const point = this.localPoint(event);
+    const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
+    if (handle) {
+      this.autoFit(handle);
+      return;
+    }
     if (isInHeader(this.geometry, point.x, point.y)) return;
     this.startEditing("edit", this.sheet.get(this.currentSelection.active));
   };
@@ -807,6 +937,18 @@ export class GridView {
     });
   };
 
+  /** 끄는 중인 경계선의 새 자리 (캔버스 좌표) */
+  private resizeGuide(): { axis: Axis; position: number } | null {
+    if (!this.resizing) return null;
+    const { handle, size } = this.resizing;
+    const { geometry } = this;
+    const position =
+      handle.axis === "col"
+        ? geometry.headerWidth + geometry.cols.offset(handle.index) - this.scroller.scrollLeft + size
+        : geometry.headerHeight + geometry.rows.offset(handle.index) - this.scroller.scrollTop + size;
+    return { axis: handle.axis, position };
+  }
+
   private render(): void {
     const viewport = this.viewport();
     const ratio = window.devicePixelRatio || 1;
@@ -827,6 +969,7 @@ export class GridView {
       engine: this.engine,
       selection: this.currentSelection,
       copied: this.copied?.range ?? null,
+      guide: this.resizeGuide(),
       geometry: this.geometry,
       viewport,
     });

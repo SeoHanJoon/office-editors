@@ -3,7 +3,7 @@ import type { FormulaEngine } from "./formula-engine";
 import { FormulaError, formatValue, type CellValue } from "./formula-value";
 import { cellRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
 import { selectionRange, type Selection } from "./selection";
-import type { Sheet } from "./sheet";
+import type { Axis, Sheet } from "./sheet";
 
 export interface RenderState {
   readonly sheet: Sheet;
@@ -12,6 +12,8 @@ export interface RenderState {
   readonly selection: Selection;
   /** 복사하거나 잘라낸 범위. 점선 테두리를 그린다. 없으면 null */
   readonly copied?: CellRange | null;
+  /** 경계선을 끄는 중이면 새 경계선 자리. position은 캔버스 좌표(열은 x, 행은 y)다. 없으면 null */
+  readonly guide?: { readonly axis: Axis; readonly position: number } | null;
   /** 머리글과 줄마다의 크기. 행·열 수가 sheet와 같아야 한다. */
   readonly geometry: GridGeometry;
   readonly viewport: Viewport;
@@ -41,6 +43,8 @@ export const THEME = {
   problemText: "#a4262c",
   problemBackground: "#fff8f8",
   problemBorder: "#e0b4b4",
+  /** 경계선을 끄는 중에 보이는 새 경계선 */
+  resizeGuide: "#444444",
 };
 
 /**
@@ -66,6 +70,7 @@ export function drawGrid(ctx: CanvasRenderingContext2D, state: RenderState): voi
   ctx.restore();
 
   drawHeaders(ctx, state, lines);
+  drawGuide(ctx, state);
   ctx.restore();
 }
 
@@ -247,6 +252,25 @@ function drawHeaderCell(
 
   ctx.fillStyle = isSelected ? THEME.headerSelectedText : THEME.headerText;
   ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
+}
+
+/** 끄는 중인 경계선 자리: 머리글부터 화면 끝까지 점선 (Excel과 같음) */
+function drawGuide(ctx: CanvasRenderingContext2D, { guide, viewport }: RenderState): void {
+  if (!guide) return;
+  const position = crisp(guide.position);
+  ctx.beginPath();
+  if (guide.axis === "col") {
+    ctx.moveTo(position, 0);
+    ctx.lineTo(position, viewport.height);
+  } else {
+    ctx.moveTo(0, position);
+    ctx.lineTo(viewport.width, position);
+  }
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.resizeGuide;
+  ctx.setLineDash([3, 2]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 /** 1px 선이 두 픽셀에 번지지 않도록 픽셀 경계 바로 앞 가운데에 맞춘다. */
