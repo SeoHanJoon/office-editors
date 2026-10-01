@@ -1,4 +1,5 @@
 import { MAX_COLS, MAX_ROWS, cellKey, keyToAddress, toA1, type CellAddress } from "./address";
+import { DEFAULT_FORMAT, formatKey, type CellFormat } from "./cell-format";
 import { rewriteFormula, structureMapping } from "./formula-references";
 import { isFormula } from "./formula-value";
 import { canChangeStructure, mapLine, type StructureChange } from "./structure";
@@ -35,6 +36,28 @@ export interface CustomSizeChange {
 
 export type Axis = "row" | "col";
 
+/** 셀 하나의 서식 변경. format이 null이면 셀 서식을 지워 행·열 서식을 따르게 한다. */
+export interface CellFormatChange {
+  readonly address: CellAddress;
+  readonly format: CellFormat | null;
+}
+
+/** 행 또는 열 하나의 서식 변경. format이 null이면 줄 서식을 지운다. */
+export interface LineFormatChange {
+  readonly index: number;
+  readonly format: CellFormat | null;
+}
+
+/** 서식 변경 한 번. 행·열 서식을 먼저 바꾸고 셀 서식을 바꾼다. */
+export interface FormatChanges {
+  readonly cells?: readonly CellFormatChange[];
+  readonly rows?: readonly LineFormatChange[];
+  readonly cols?: readonly LineFormatChange[];
+}
+
+/** 서식이 바뀐 뒤 불린다. setFormats에 넘긴 변경 그대로다. */
+export type FormatChangeListener = (changes: FormatChanges) => void;
+
 /** 직접 바꾼 줄 크기가 바뀐 축과 줄 번호를 받는다. setCustomSizes에 넘긴 순서 그대로다. */
 export type CustomSizeListener = (axis: Axis, indexes: readonly number[]) => void;
 
@@ -55,12 +78,17 @@ export interface StructureResult {
   readonly rewritten: readonly CellChange[];
   /** 지운 줄에 있던 직접 바꾼 크기 (변경 전 줄 번호) */
   readonly removedSizes: readonly CustomSizeChange[];
+  /** 지운 줄에 있던 셀 서식과 줄 서식 (변경 전 주소·줄 번호). 줄 서식은 change 축(rows 또는 cols)에만 있다. */
+  readonly removedFormats: FormatChanges;
 }
 
 /**
- * 시트 한 장의 셀 값과 사용자가 직접 바꾼 행 높이·열 너비. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
- * 값이 있는 셀과 크기를 바꾼 줄만 Map에 넣으므로 빈 셀과 기본 크기 줄은 메모리를 쓰지 않는다.
+ * 시트 한 장의 셀 값, 사용자가 직접 바꾼 행 높이·열 너비, 서식. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
+ * 값이 있는 셀, 크기를 바꾼 줄, 서식이 있는 셀·줄만 Map에 넣으므로 빈 셀과 기본 크기·기본 서식은 메모리를 쓰지 않는다.
  * 저장할 문서 데이터는 모두 여기 있다. 자동 행 높이처럼 다시 계산할 수 있는 것은 두지 않는다. (ADR 0031)
+ *
+ * 서식은 셀·행·열 3단이다. 한 칸의 서식은 셀 서식 → 행 서식 → 열 서식 → 기본 순서로 처음 찾은 것이다. (ADR 0034)
+ * 같은 서식은 서식 표에 한 번만 두고 셀·줄에는 그 번호만 둔다. 그래서 서식을 읽으면 같은 서식은 늘 같은 객체다.
  */
 export class Sheet {
   private rows: number;
@@ -69,6 +97,15 @@ export class Sheet {
   private cells = new Map<number, string>();
   /** 직접 바꾼 행 높이·열 너비 (CSS px). 키는 줄 번호 */
   private sizes: Record<Axis, Map<number, number>> = { row: new Map(), col: new Map() };
+  /** 서식 표. 0번은 기본 서식이다. 한번 넣은 서식은 빼지 않는다. */
+  private readonly formatTable: CellFormat[] = [DEFAULT_FORMAT];
+  /** formatKey → 서식 표 번호 */
+  private readonly formatIds = new Map<string, number>([[formatKey(DEFAULT_FORMAT), 0]]);
+  /** 셀 서식. 키는 cellKey(주소), 값은 서식 표 번호. 행·열 서식을 덮으려고 기본 서식(0)도 둘 수 있다. */
+  private cellFormatIds = new Map<number, number>();
+  /** 행 서식·열 서식. 키는 줄 번호, 값은 서식 표 번호 */
+  private lineFormatIds: Record<Axis, Map<number, number>> = { row: new Map(), col: new Map() };
+  private readonly formatListeners = new Set<FormatChangeListener>();
   private readonly listeners = new Set<SheetChangeListener>();
   private readonly sizeListeners = new Set<CustomSizeListener>();
   private readonly structureListeners = new Set<StructureChangeListener>();
@@ -195,10 +232,99 @@ export class Sheet {
     return () => this.sizeListeners.delete(listener);
   }
 
+  /** 칸에 보이는 서식. 셀 서식 → 행 서식 → 열 서식 → 기본 서식 순서로 처음 찾은 것이다. */
+  format({ row, col }: CellAddress): CellFormat {
+    const { cellFormatIds, lineFormatIds } = this;
+    if (cellFormatIds.size === 0 && lineFormatIds.row.size === 0 && lineFormatIds.col.size === 0) return DEFAULT_FORMAT;
+    const id = cellFormatIds.get(row * STRIDE + col) ?? lineFormatIds.row.get(row) ?? lineFormatIds.col.get(col) ?? 0;
+    return this.formatTable[id]!;
+  }
+
+  /** 셀에 직접 준 서식. 없으면(행·열 서식을 따르면) null */
+  cellFormat(address: CellAddress): CellFormat | null {
+    const id = this.cellFormatIds.get(cellKey(address));
+    return id === undefined ? null : this.formatTable[id]!;
+  }
+
+  /** 행 서식 또는 열 서식. 없으면 null */
+  lineFormat(axis: Axis, index: number): CellFormat | null {
+    const id = this.lineFormatIds[axis].get(index);
+    return id === undefined ? null : this.formatTable[id]!;
+  }
+
+  /** 셀 서식이 있는 셀을 모두 [주소, 서식]으로 훑는다. 순서는 정해져 있지 않다. */
+  *cellFormats(): IterableIterator<[CellAddress, CellFormat]> {
+    for (const [key, id] of this.cellFormatIds) yield [addressOf(key), this.formatTable[id]!];
+  }
+
+  /** 서식이 있는 행 또는 열을 모두 [줄 번호, 서식]으로 훑는다. 순서는 정해져 있지 않다. */
+  *lineFormats(axis: Axis): IterableIterator<[number, CellFormat]> {
+    for (const [index, id] of this.lineFormatIds[axis]) yield [index, this.formatTable[id]!];
+  }
+
+  /**
+   * 서식을 한 번에 바꾸고 변경을 한 번 알린다. 행·열 서식을 먼저 바꾸고 셀 서식을 바꾼다.
+   * 셀 서식이 행·열에서 물려받는 서식과 같으면 셀 서식을 두지 않는다. (보이는 서식은 같다)
+   * 편집은 SetFormatsCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
+   * 시트 밖 셀·줄이 하나라도 있으면 아무것도 바꾸지 않고 RangeError를 던진다.
+   */
+  setFormats(changes: FormatChanges): void {
+    const { cells = [], rows = [], cols = [] } = changes;
+    for (const { address } of cells) {
+      if (!this.contains(address)) throw new RangeError(`시트(${this.rows}행 × ${this.cols}열) 밖의 셀이다: ${toA1(address)}`);
+    }
+    for (const [axis, lines] of [["row", rows], ["col", cols]] as const) {
+      const count = axis === "row" ? this.rows : this.cols;
+      for (const { index } of lines) {
+        if (!Number.isInteger(index) || index < 0 || index >= count) {
+          throw new RangeError(`시트 밖의 ${axis === "row" ? "행" : "열"}이다: ${index}`);
+        }
+      }
+    }
+    if (cells.length === 0 && rows.length === 0 && cols.length === 0) return;
+    for (const [axis, lines] of [["row", rows], ["col", cols]] as const) {
+      const ids = this.lineFormatIds[axis];
+      for (const { index, format } of lines) {
+        const id = format === null ? null : this.formatId(format);
+        // 기본 서식인 열 서식은 없는 것과 같다. (행 서식은 열 서식을 덮으므로 기본 서식도 둔다)
+        if (id === null || (axis === "col" && id === 0)) ids.delete(index);
+        else ids.set(index, id);
+      }
+    }
+    const { row: rowIds, col: colIds } = this.lineFormatIds;
+    for (const { address, format } of cells) {
+      const key = cellKey(address);
+      const id = format === null ? null : this.formatId(format);
+      const inherited = rowIds.get(address.row) ?? colIds.get(address.col) ?? 0;
+      if (id === null || id === inherited) this.cellFormatIds.delete(key);
+      else this.cellFormatIds.set(key, id);
+    }
+    for (const listener of this.formatListeners) listener(changes);
+  }
+
+  /** 서식이 바뀔 때마다 listener를 부른다. 행·열을 넣고 지울 때는 부르지 않는다. (onStructureChange로 안다) */
+  onFormatChange(listener: FormatChangeListener): () => void {
+    this.formatListeners.add(listener);
+    return () => this.formatListeners.delete(listener);
+  }
+
+  /** 서식 표 번호. 처음 보는 서식이면 표에 넣는다. */
+  private formatId(format: CellFormat): number {
+    const key = formatKey(format);
+    let id = this.formatIds.get(key);
+    if (id === undefined) {
+      id = this.formatTable.length;
+      this.formatTable.push(Object.freeze({ ...format }));
+      this.formatIds.set(key, id);
+    }
+    return id;
+  }
+
   /**
    * 행·열을 넣거나 지운다. 뒤쪽 셀을 옮기고, 모든 수식의 참조를 Excel처럼 고친다. (structureMapping)
-   * 시트 크기도 넣은 만큼 늘고 지운 만큼 줄어든다. 직접 바꾼 줄 크기도 셀처럼 옮긴다. (새로 넣은 줄은 기본 크기)
-   * 그다음 cells와 sizes(change 축의 줄 크기)를 넣는다. (변경 뒤 위치. 되돌릴 때 지운 셀·크기와 고치기 전 수식을 되살리는 데 쓴다)
+   * 시트 크기도 넣은 만큼 늘고 지운 만큼 줄어든다. 직접 바꾼 줄 크기와 서식도 셀처럼 옮긴다. (새로 넣은 줄은 기본 크기·서식)
+   * 그다음 cells, sizes(change 축의 줄 크기), formats를 넣는다.
+   * (변경 뒤 위치. 되돌릴 때 지운 셀·크기·서식과 고치기 전 수식을 되살리는 데 쓴다. formats의 셀 서식은 물려받는 서식과 같아도 그대로 둔다)
    * 알림은 onStructureChange로 한 번만 간다. onChange는 부르지 않는다.
    *
    * 편집은 StructureCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
@@ -208,6 +334,7 @@ export class Sheet {
     change: StructureChange,
     cells: readonly CellChange[] = [],
     sizes: readonly CustomSizeChange[] = [],
+    formats: FormatChanges = {},
   ): StructureResult {
     if (!canChangeStructure(change, this)) {
       throw new RangeError(`시트(${this.rows}행 × ${this.cols}열)에서 할 수 없는 행·열 변경이다: ${JSON.stringify(change)}`);
@@ -224,6 +351,15 @@ export class Sheet {
     for (const { index: line, size } of sizes) {
       if (!Number.isInteger(line) || line < 0 || line >= newSize) throw new RangeError(`변경 뒤 시트 밖의 줄이다: ${line}`);
       if (size !== null && !(size > 0 && Number.isFinite(size))) throw new RangeError(`줄 크기는 0보다 커야 한다: ${size}`);
+    }
+    for (const { address } of formats.cells ?? []) {
+      if (!inBounds(address, rows, cols)) throw new RangeError(`변경 뒤 시트 밖의 셀이다: ${toA1(address)}`);
+    }
+    for (const { index: line } of [...(formats.rows ?? []), ...(formats.cols ?? [])]) {
+      if (!Number.isInteger(line) || line < 0) throw new RangeError(`시트 밖의 줄이다: ${line}`);
+    }
+    if ((formats.rows ?? []).some(({ index: line }) => line >= rows) || (formats.cols ?? []).some(({ index: line }) => line >= cols)) {
+      throw new RangeError("변경 뒤 시트 밖의 줄 서식이다");
     }
 
     const mapping = structureMapping(change);
@@ -272,12 +408,44 @@ export class Sheet {
       else nextSizes.set(line, size);
     }
 
+    // 셀 서식은 셀처럼, 줄 서식은 줄 크기처럼 바뀐 축만 옮긴다.
+    const nextCellFormats = new Map<number, number>();
+    const removedCellFormats: CellFormatChange[] = [];
+    for (const [key, id] of this.cellFormatIds) {
+      const row = Math.floor(key / STRIDE);
+      const col = key - row * STRIDE;
+      const line = lineAfter(change, byRow ? row : col);
+      if (line === null) removedCellFormats.push({ address: { row, col }, format: this.formatTable[id]! });
+      else nextCellFormats.set(byRow ? line * STRIDE + col : row * STRIDE + line, id);
+    }
+    const nextLineFormats = new Map<number, number>();
+    const removedLineFormats: LineFormatChange[] = [];
+    for (const [line, id] of this.lineFormatIds[change.axis]) {
+      const after = lineAfter(change, line);
+      if (after === null) removedLineFormats.push({ index: line, format: this.formatTable[id]! });
+      else nextLineFormats.set(after, id);
+    }
+    const lineFormatIds = { ...this.lineFormatIds, [change.axis]: nextLineFormats };
+    for (const [axis, lines] of [["row", formats.rows ?? []], ["col", formats.cols ?? []]] as const) {
+      for (const { index: line, format } of lines) {
+        if (format === null) lineFormatIds[axis].delete(line);
+        else lineFormatIds[axis].set(line, this.formatId(format));
+      }
+    }
+    for (const { address, format } of formats.cells ?? []) {
+      if (format === null) nextCellFormats.delete(cellKey(address));
+      else nextCellFormats.set(cellKey(address), this.formatId(format));
+    }
+
     this.cells = next;
     this.sizes = { ...this.sizes, [change.axis]: nextSizes };
+    this.cellFormatIds = nextCellFormats;
+    this.lineFormatIds = lineFormatIds;
     this.rows = rows;
     this.cols = cols;
     for (const listener of this.structureListeners) listener(change, changed);
-    return { removed, rewritten, removedSizes };
+    const removedFormats: FormatChanges = { cells: removedCellFormats, [byRow ? "rows" : "cols"]: removedLineFormats };
+    return { removed, rewritten, removedSizes, removedFormats };
   }
 
   /** 행·열을 넣거나 지울 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
