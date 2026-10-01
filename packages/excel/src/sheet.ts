@@ -26,6 +26,18 @@ export interface CellChange {
   readonly value: string;
 }
 
+/** 줄(행 또는 열) 하나의 크기 변경. size가 null이면 직접 바꾼 크기를 지워 기본(행은 자동) 크기로 돌린다. */
+export interface CustomSizeChange {
+  readonly index: number;
+  /** CSS px. 0보다 크다. */
+  readonly size: number | null;
+}
+
+export type Axis = "row" | "col";
+
+/** 직접 바꾼 줄 크기가 바뀐 축과 줄 번호를 받는다. setCustomSizes에 넘긴 순서 그대로다. */
+export type CustomSizeListener = (axis: Axis, indexes: readonly number[]) => void;
+
 /** 값이 바뀐 셀 주소를 받는다. setCells에 넘긴 순서 그대로다. */
 export type SheetChangeListener = (addresses: readonly CellAddress[]) => void;
 
@@ -41,18 +53,24 @@ export interface StructureResult {
   readonly removed: readonly CellChange[];
   /** 참조를 고친 수식 셀 (변경 뒤 주소와 고치기 전 글자) */
   readonly rewritten: readonly CellChange[];
+  /** 지운 줄에 있던 직접 바꾼 크기 (변경 전 줄 번호) */
+  readonly removedSizes: readonly CustomSizeChange[];
 }
 
 /**
- * 시트 한 장의 셀 값. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
- * 값이 있는 셀만 Map에 넣으므로 빈 셀은 메모리를 쓰지 않는다.
+ * 시트 한 장의 셀 값과 사용자가 직접 바꾼 행 높이·열 너비. 셀에는 사용자가 입력한 글자를 그대로 저장한다. ("12", "=A1+1")
+ * 값이 있는 셀과 크기를 바꾼 줄만 Map에 넣으므로 빈 셀과 기본 크기 줄은 메모리를 쓰지 않는다.
+ * 저장할 문서 데이터는 모두 여기 있다. 자동 행 높이처럼 다시 계산할 수 있는 것은 두지 않는다. (ADR 0031)
  */
 export class Sheet {
   private rows: number;
   private cols: number;
   /** 키는 cellKey(주소). 값은 빈 문자열이 아니다. */
   private cells = new Map<number, string>();
+  /** 직접 바꾼 행 높이·열 너비 (CSS px). 키는 줄 번호 */
+  private sizes: Record<Axis, Map<number, number>> = { row: new Map(), col: new Map() };
   private readonly listeners = new Set<SheetChangeListener>();
+  private readonly sizeListeners = new Set<CustomSizeListener>();
   private readonly structureListeners = new Set<StructureChangeListener>();
 
   constructor({ rowCount, colCount, data = [] }: SheetOptions) {
@@ -97,7 +115,19 @@ export class Sheet {
 
   /** 값이 있는 셀을 모두 [주소, 입력한 글자]로 훑는다. 순서는 정해져 있지 않다. */
   *entries(): IterableIterator<[CellAddress, string]> {
-    for (const [key, value] of this.cells) yield [keyToAddress(key), value];
+    for (const [key, value] of this.cells) yield [addressOf(key), value];
+  }
+
+  /**
+   * 입력한 글자가 match를 만족하는 셀의 주소. 순서는 정해져 있지 않다.
+   * entries()와 달리 맞지 않는 셀에는 주소 객체를 만들지 않아서, 드물게 있는 셀을 시트 전체에서 찾을 때 빠르다.
+   */
+  findCells(match: (input: string) => boolean): CellAddress[] {
+    const found: CellAddress[] = [];
+    this.cells.forEach((value, key) => {
+      if (match(value)) found.push(addressOf(key));
+    });
+    return found;
   }
 
   /**
@@ -126,16 +156,59 @@ export class Sheet {
     return () => this.listeners.delete(listener);
   }
 
+  /** 직접 바꾼 줄 크기 (CSS px). 바꾸지 않았으면 null */
+  customSize(axis: Axis, index: number): number | null {
+    return this.sizes[axis].get(index) ?? null;
+  }
+
+  /** 직접 바꾼 줄을 [줄 번호, 크기]로 훑는다. 순서는 정해져 있지 않다. */
+  customSizes(axis: Axis): IterableIterator<[number, number]> {
+    return this.sizes[axis].entries();
+  }
+
+  /**
+   * 한 축의 줄 크기를 한 번에 바꾸고 변경을 한 번 알린다.
+   * 편집은 SetCustomSizesCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
+   * 시트 밖 줄이 있거나 크기가 0보다 큰 수가 아니면 아무것도 바꾸지 않고 RangeError를 던진다.
+   */
+  setCustomSizes(axis: Axis, changes: readonly CustomSizeChange[]): void {
+    const count = axis === "row" ? this.rows : this.cols;
+    for (const { index, size } of changes) {
+      if (!Number.isInteger(index) || index < 0 || index >= count) {
+        throw new RangeError(`시트 밖의 ${axis === "row" ? "행" : "열"}이다: ${index}`);
+      }
+      if (size !== null && !(size > 0 && Number.isFinite(size))) throw new RangeError(`줄 크기는 0보다 커야 한다: ${size}`);
+    }
+    if (changes.length === 0) return;
+    const sizes = this.sizes[axis];
+    for (const { index, size } of changes) {
+      if (size === null) sizes.delete(index);
+      else sizes.set(index, size);
+    }
+    const indexes = changes.map((change) => change.index);
+    for (const listener of this.sizeListeners) listener(axis, indexes);
+  }
+
+  /** 직접 바꾼 줄 크기가 바뀔 때마다 listener를 부른다. 행·열을 넣고 지울 때는 부르지 않는다. (onStructureChange로 안다) */
+  onCustomSizeChange(listener: CustomSizeListener): () => void {
+    this.sizeListeners.add(listener);
+    return () => this.sizeListeners.delete(listener);
+  }
+
   /**
    * 행·열을 넣거나 지운다. 뒤쪽 셀을 옮기고, 모든 수식의 참조를 Excel처럼 고친다. (structureMapping)
-   * 시트 크기도 넣은 만큼 늘고 지운 만큼 줄어든다.
-   * 그다음 cells를 넣는다. (변경 뒤 주소. 되돌릴 때 지운 셀과 고치기 전 수식을 되살리는 데 쓴다)
+   * 시트 크기도 넣은 만큼 늘고 지운 만큼 줄어든다. 직접 바꾼 줄 크기도 셀처럼 옮긴다. (새로 넣은 줄은 기본 크기)
+   * 그다음 cells와 sizes(change 축의 줄 크기)를 넣는다. (변경 뒤 위치. 되돌릴 때 지운 셀·크기와 고치기 전 수식을 되살리는 데 쓴다)
    * 알림은 onStructureChange로 한 번만 간다. onChange는 부르지 않는다.
    *
    * 편집은 StructureCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
-   * 넣을 자리·지울 줄이 시트 밖이거나, 시트가 최대 크기를 넘거나 비게 되거나, cells가 새 크기 밖이면 아무것도 바꾸지 않고 RangeError를 던진다.
+   * 넣을 자리·지울 줄이 시트 밖이거나, 시트가 최대 크기를 넘거나 비게 되거나, cells·sizes가 새 크기 밖이면 아무것도 바꾸지 않고 RangeError를 던진다.
    */
-  changeStructure(change: StructureChange, cells: readonly CellChange[] = []): StructureResult {
+  changeStructure(
+    change: StructureChange,
+    cells: readonly CellChange[] = [],
+    sizes: readonly CustomSizeChange[] = [],
+  ): StructureResult {
     if (!canChangeStructure(change, this)) {
       throw new RangeError(`시트(${this.rows}행 × ${this.cols}열)에서 할 수 없는 행·열 변경이다: ${JSON.stringify(change)}`);
     }
@@ -147,6 +220,10 @@ export class Sheet {
     const cols = byRow ? this.cols : newSize;
     for (const { address } of cells) {
       if (!inBounds(address, rows, cols)) throw new RangeError(`변경 뒤 시트 밖의 셀이다: ${toA1(address)}`);
+    }
+    for (const { index: line, size } of sizes) {
+      if (!Number.isInteger(line) || line < 0 || line >= newSize) throw new RangeError(`변경 뒤 시트 밖의 줄이다: ${line}`);
+      if (size !== null && !(size > 0 && Number.isFinite(size))) throw new RangeError(`줄 크기는 0보다 커야 한다: ${size}`);
     }
 
     const mapping = structureMapping(change);
@@ -182,11 +259,25 @@ export class Sheet {
       changed.push(address);
     }
 
+    // 줄 크기는 바뀐 축만 옮긴다.
+    const nextSizes = new Map<number, number>();
+    const removedSizes: CustomSizeChange[] = [];
+    for (const [line, size] of this.sizes[change.axis]) {
+      const after = lineAfter(change, line);
+      if (after === null) removedSizes.push({ index: line, size });
+      else nextSizes.set(after, size);
+    }
+    for (const { index: line, size } of sizes) {
+      if (size === null) nextSizes.delete(line);
+      else nextSizes.set(line, size);
+    }
+
     this.cells = next;
+    this.sizes = { ...this.sizes, [change.axis]: nextSizes };
     this.rows = rows;
     this.cols = cols;
     for (const listener of this.structureListeners) listener(change, changed);
-    return { removed, rewritten };
+    return { removed, rewritten, removedSizes };
   }
 
   /** 행·열을 넣거나 지울 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */

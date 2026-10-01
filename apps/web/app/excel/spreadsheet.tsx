@@ -40,6 +40,10 @@ export interface ExcelTestHandle {
   cell(a1: string): string;
   /** 셀("B3")에 보이는 계산값 글자. 빈 셀이면 "" */
   value(a1: string): string;
+  /** 화면에 그리는 행 높이 (px). 행 번호는 화면과 같이 1부터 */
+  rowHeight(row: number): number;
+  /** 화면에 그리는 열 너비 (px). 열 이름("B")으로 */
+  colWidth(column: string): number;
 }
 
 declare global {
@@ -80,6 +84,8 @@ export function Spreadsheet() {
         }),
         cell: (a1) => sheet.get(address(a1)),
         value: (a1) => formatValue(engine.getValue(address(a1))),
+        rowHeight: (row) => view.displayedSize("row", row - 1),
+        colWidth: (column) => view.displayedSize("col", address(`${column}1`).col),
       };
     }
     return () => {

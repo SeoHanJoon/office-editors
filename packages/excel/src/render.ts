@@ -1,9 +1,10 @@
 import { columnName, type CellRange } from "./address";
 import type { FormulaEngine } from "./formula-engine";
 import { FormulaError, formatValue, type CellValue } from "./formula-value";
-import { cellRect, visibleRange, type GridLayout, type Rect, type Viewport } from "./layout";
+import { cellRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
+import { textLines } from "./resize";
 import { selectionRange, type Selection } from "./selection";
-import type { Sheet } from "./sheet";
+import type { Axis, Sheet } from "./sheet";
 
 export interface RenderState {
   readonly sheet: Sheet;
@@ -12,7 +13,10 @@ export interface RenderState {
   readonly selection: Selection;
   /** 복사하거나 잘라낸 범위. 점선 테두리를 그린다. 없으면 null */
   readonly copied?: CellRange | null;
-  readonly layout: GridLayout;
+  /** 경계선을 끄는 중이면 새 경계선 자리. position은 캔버스 좌표(열은 x, 행은 y)다. 없으면 null */
+  readonly guide?: { readonly axis: Axis; readonly position: number } | null;
+  /** 머리글과 줄마다의 크기. 행·열 수가 sheet와 같아야 한다. */
+  readonly geometry: GridGeometry;
   readonly viewport: Viewport;
 }
 
@@ -21,6 +25,17 @@ export const CELL_FONT = '13px -apple-system, "Segoe UI", "Malgun Gothic", sans-
 
 /** 셀 안쪽 글자 여백 (px) */
 export const CELL_PADDING = 4;
+
+/** 셀 글자 한 줄의 높이 (px). 셀 입력창도 같은 줄 높이를 쓴다. */
+export const LINE_HEIGHT = 16;
+
+/** 셀 글자 위아래 여백 (px). 한 줄이면 2 + 16 + 2 = 기본 행 높이 20px */
+export const CELL_VERTICAL_PADDING = 2;
+
+/** lines줄 글자가 다 들어가는 행 높이. 기본 높이보다 작아지지 않는다. */
+export function autoRowHeight(lines: number, defaultHeight: number): number {
+  return Math.max(defaultHeight, lines * LINE_HEIGHT + CELL_VERTICAL_PADDING * 2);
+}
 
 /** Excel과 비슷한 색 */
 export const THEME = {
@@ -40,6 +55,8 @@ export const THEME = {
   problemText: "#a4262c",
   problemBackground: "#fff8f8",
   problemBorder: "#e0b4b4",
+  /** 경계선을 끄는 중에 보이는 새 경계선 */
+  resizeGuide: "#444444",
 };
 
 /**
@@ -47,23 +64,25 @@ export const THEME = {
  * (고해상도 화면 배율은 부르는 쪽이 ctx.setTransform으로 맞춘다)
  */
 export function drawGrid(ctx: CanvasRenderingContext2D, state: RenderState): void {
-  const { layout, viewport } = state;
+  const { geometry, viewport } = state;
   ctx.save();
   ctx.fillStyle = THEME.background;
   ctx.fillRect(0, 0, viewport.width, viewport.height);
 
+  const lines = visibleLines(geometry, viewport);
   // 셀 영역: 머리글 위로 넘치지 않게 잘라서 그린다.
   ctx.save();
   ctx.beginPath();
-  ctx.rect(layout.headerWidth, layout.headerHeight, viewport.width, viewport.height);
+  ctx.rect(geometry.headerWidth, geometry.headerHeight, viewport.width, viewport.height);
   ctx.clip();
   drawSelectionFill(ctx, state);
-  drawGridLines(ctx, state);
-  drawCellText(ctx, state);
+  drawGridLines(ctx, lines);
+  drawCellText(ctx, state, lines);
   drawSelectionBorder(ctx, state);
   ctx.restore();
 
-  drawHeaders(ctx, state);
+  drawHeaders(ctx, state, lines);
+  drawGuide(ctx, state);
   ctx.restore();
 }
 
@@ -74,34 +93,49 @@ export function valueAlign(value: CellValue): "left" | "center" | "right" {
   return "left";
 }
 
-function drawSelectionFill(ctx: CanvasRenderingContext2D, { layout, viewport, selection }: RenderState): void {
+/** 보이는 범위와, 그 줄들의 화면 경계 위치. xs[i]는 range.left + i 열의 왼쪽 끝이고 마지막 값은 오른쪽 끝이다. (ys도 같다) */
+interface VisibleLines {
+  readonly range: CellRange;
+  readonly xs: readonly number[];
+  readonly ys: readonly number[];
+}
+
+/** 보이는 줄의 경계 위치를 한 번에 구해 둔다. 칸마다 위치를 찾지 않게 한다. */
+function visibleLines(geometry: GridGeometry, viewport: Viewport): VisibleLines {
+  const range = visibleRange(geometry, viewport);
+  const xs = [geometry.headerWidth + geometry.cols.offset(range.left) - viewport.scrollLeft];
+  for (let col = range.left; col <= range.right; col++) xs.push(xs[xs.length - 1]! + geometry.cols.size(col));
+  const ys = [geometry.headerHeight + geometry.rows.offset(range.top) - viewport.scrollTop];
+  for (let row = range.top; row <= range.bottom; row++) ys.push(ys[ys.length - 1]! + geometry.rows.size(row));
+  return { range, xs, ys };
+}
+
+function drawSelectionFill(ctx: CanvasRenderingContext2D, { geometry, viewport, selection }: RenderState): void {
   const range = selectionRange(selection);
   if (range.top === range.bottom && range.left === range.right) return;
   // 범위는 옅게 칠하고 활성 셀만 흰색으로 둔다. (Excel과 같음)
-  const area = rangeRect(layout, viewport, range);
+  const area = rangeRect(geometry, viewport, range);
   ctx.fillStyle = THEME.selectionFill;
   ctx.fillRect(area.x, area.y, area.width, area.height);
-  const active = cellRect(layout, viewport, selection.active);
+  const active = cellRect(geometry, viewport, selection.active);
   ctx.fillStyle = THEME.background;
   ctx.fillRect(active.x, active.y, active.width, active.height);
 }
 
-function drawGridLines(ctx: CanvasRenderingContext2D, { sheet, layout, viewport }: RenderState): void {
-  const range = visibleRange(layout, viewport, sheet);
-  const first = cellRect(layout, viewport, { row: range.top, col: range.left });
-  const last = cellRect(layout, viewport, { row: range.bottom, col: range.right });
-  const right = last.x + last.width;
-  const bottom = last.y + last.height;
-
+function drawGridLines(ctx: CanvasRenderingContext2D, { xs, ys }: VisibleLines): void {
+  const left = xs[0]!;
+  const right = xs[xs.length - 1]!;
+  const top = ys[0]!;
+  const bottom = ys[ys.length - 1]!;
   ctx.beginPath();
-  for (let col = range.left; col <= range.right + 1; col++) {
-    const x = crisp(first.x + (col - range.left) * layout.colWidth);
-    ctx.moveTo(x, first.y);
+  for (const position of xs) {
+    const x = crisp(position);
+    ctx.moveTo(x, top);
     ctx.lineTo(x, bottom);
   }
-  for (let row = range.top; row <= range.bottom + 1; row++) {
-    const y = crisp(first.y + (row - range.top) * layout.rowHeight);
-    ctx.moveTo(first.x, y);
+  for (const position of ys) {
+    const y = crisp(position);
+    ctx.moveTo(left, y);
     ctx.lineTo(right, y);
   }
   ctx.lineWidth = 1;
@@ -109,31 +143,44 @@ function drawGridLines(ctx: CanvasRenderingContext2D, { sheet, layout, viewport 
   ctx.stroke();
 }
 
-function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine, layout, viewport }: RenderState): void {
-  const range = visibleRange(layout, viewport, sheet);
+/**
+ * 셀 글자는 셀 아래쪽에 붙여 그린다. (Excel 기본 세로 정렬) 여러 줄이면 마지막 줄이 아래쪽에 온다.
+ * 입력한 글자의 줄바꿈만 줄을 나누고, 수식 결과의 줄바꿈은 한 줄로 그린다. (ADR 0031)
+ */
+function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine }: RenderState, { range, xs, ys }: VisibleLines): void {
   ctx.font = THEME.font;
   ctx.fillStyle = THEME.text;
   ctx.textBaseline = "middle";
   for (let row = range.top; row <= range.bottom; row++) {
+    const y = ys[row - range.top]!;
+    const height = ys[row - range.top + 1]! - y;
     for (let col = range.left; col <= range.right; col++) {
+      const x = xs[col - range.left]!;
+      const width = xs[col - range.left + 1]! - x;
       if (engine.isPending({ row, col })) {
-        drawPending(ctx, cellRect(layout, viewport, { row, col }));
+        drawPending(ctx, { x, y, width, height });
         continue;
       }
       const value = engine.getValue({ row, col });
       const text = formatValue(value);
       if (text === "") continue;
-      const rect = cellRect(layout, viewport, { row, col });
       const align = valueAlign(value);
-      const x =
-        align === "left" ? rect.x + CELL_PADDING : align === "right" ? rect.x + rect.width - CELL_PADDING : rect.x + rect.width / 2;
+      const textX = align === "left" ? x + CELL_PADDING : align === "right" ? x + width - CELL_PADDING : x + width / 2;
+      // 마지막 줄의 가운데. 한 줄도 안 들어가는 낮은 행은 가운데에 둔다.
+      const lastY = Math.max(y + height - CELL_VERTICAL_PADDING - LINE_HEIGHT / 2, y + height / 2);
+      // 줄바꿈이 없는 셀(거의 전부)은 입력한 글자를 읽지 않는다.
+      const lines = text.indexOf("\n") < 0 && text.indexOf("\r") < 0 ? null : textLines(sheet.get({ row, col }), text);
       // 글자가 칸을 넘치면 잘라낸다. (옆 칸으로 넘쳐 보이게 하는 건 나중에)
       ctx.save();
       ctx.beginPath();
-      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.rect(x, y, width, height);
       ctx.clip();
       ctx.textAlign = align;
-      ctx.fillText(text, x, rect.y + rect.height / 2);
+      if (lines) {
+        for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i]!, textX, lastY - (lines.length - 1 - i) * LINE_HEIGHT);
+      } else {
+        ctx.fillText(text, textX, lastY);
+      }
       ctx.restore();
     }
   }
@@ -147,23 +194,26 @@ function drawPending(ctx: CanvasRenderingContext2D, rect: Rect): void {
   ctx.fillStyle = THEME.text;
 }
 
-function drawSelectionBorder(ctx: CanvasRenderingContext2D, { layout, viewport, selection, copied }: RenderState): void {
-  const area = rangeRect(layout, viewport, selectionRange(selection));
+function drawSelectionBorder(ctx: CanvasRenderingContext2D, { geometry, viewport, selection, copied }: RenderState): void {
+  const area = rangeRect(geometry, viewport, selectionRange(selection));
   ctx.lineWidth = 2;
   ctx.strokeStyle = THEME.selectionBorder;
   ctx.strokeRect(Math.round(area.x), Math.round(area.y), area.width, area.height);
   if (!copied) return;
   // 복사한 범위: Excel처럼 점선 (움직이지는 않는다)
-  const copy = rangeRect(layout, viewport, copied);
+  const copy = rangeRect(geometry, viewport, copied);
   ctx.setLineDash([4, 3]);
   ctx.strokeRect(Math.round(copy.x), Math.round(copy.y), copy.width, copy.height);
   ctx.setLineDash([]);
 }
 
-function drawHeaders(ctx: CanvasRenderingContext2D, { sheet, layout, viewport, selection }: RenderState): void {
-  const range = visibleRange(layout, viewport, sheet);
+function drawHeaders(
+  ctx: CanvasRenderingContext2D,
+  { geometry, viewport, selection }: RenderState,
+  { range, xs, ys }: VisibleLines,
+): void {
   const selected = selectionRange(selection);
-  const { headerWidth, headerHeight } = layout;
+  const { headerWidth, headerHeight } = geometry;
 
   ctx.fillStyle = THEME.headerBackground;
   ctx.fillRect(0, 0, viewport.width, headerHeight);
@@ -176,12 +226,14 @@ function drawHeaders(ctx: CanvasRenderingContext2D, { sheet, layout, viewport, s
   ctx.strokeStyle = THEME.headerLine;
 
   for (let col = range.left; col <= range.right; col++) {
-    const { x, width } = cellRect(layout, viewport, { row: range.top, col });
+    const x = xs[col - range.left]!;
+    const width = xs[col - range.left + 1]! - x;
     const isSelected = col >= selected.left && col <= selected.right;
     drawHeaderCell(ctx, { x, y: 0, width, height: headerHeight }, columnName(col), isSelected, "bottom");
   }
   for (let row = range.top; row <= range.bottom; row++) {
-    const { y, height } = cellRect(layout, viewport, { row, col: range.left });
+    const y = ys[row - range.top]!;
+    const height = ys[row - range.top + 1]! - y;
     const isSelected = row >= selected.top && row <= selected.bottom;
     drawHeaderCell(ctx, { x: 0, y, width: headerWidth, height }, String(row + 1), isSelected, "right");
   }
@@ -226,14 +278,23 @@ function drawHeaderCell(
   ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
 }
 
-function rangeRect(layout: GridLayout, viewport: Viewport, range: CellRange): Rect {
-  const start = cellRect(layout, viewport, { row: range.top, col: range.left });
-  return {
-    x: start.x,
-    y: start.y,
-    width: (range.right - range.left + 1) * layout.colWidth,
-    height: (range.bottom - range.top + 1) * layout.rowHeight,
-  };
+/** 끄는 중인 경계선 자리: 머리글부터 화면 끝까지 점선 (Excel과 같음) */
+function drawGuide(ctx: CanvasRenderingContext2D, { guide, viewport }: RenderState): void {
+  if (!guide) return;
+  const position = crisp(guide.position);
+  ctx.beginPath();
+  if (guide.axis === "col") {
+    ctx.moveTo(position, 0);
+    ctx.lineTo(position, viewport.height);
+  } else {
+    ctx.moveTo(0, position);
+    ctx.lineTo(viewport.width, position);
+  }
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.resizeGuide;
+  ctx.setLineDash([3, 2]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 /** 1px 선이 두 픽셀에 번지지 않도록 픽셀 경계 바로 앞 가운데에 맞춘다. */

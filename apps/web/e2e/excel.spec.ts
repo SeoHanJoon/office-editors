@@ -898,3 +898,173 @@ test.describe("오른쪽 클릭 메뉴", () => {
     expect(await cell(page, "B2")).toBe(before);
   });
 });
+
+test.describe("열 너비·행 높이 조절", () => {
+  const colWidth = (page: Page, column: string) => page.evaluate((column) => window.__excel!.colWidth(column), column);
+  const rowHeight = (page: Page, row: number) => page.evaluate((row) => window.__excel!.rowHeight(row), row);
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+
+  /** 스크롤하지 않은 표에서, 기본 크기 줄만 앞에 있을 때 열("B")의 오른쪽 경계선 또는 행(2)의 아래쪽 경계선 좌표 */
+  async function border(page: Page, line: string | number) {
+    const box = (await grid(page).boundingBox())!;
+    return typeof line === "string"
+      ? { x: box.x + HEADER_WIDTH + (line.charCodeAt(0) - 64) * COL_WIDTH, y: box.y + HEADER_HEIGHT / 2 }
+      : { x: box.x + HEADER_WIDTH / 2, y: box.y + HEADER_HEIGHT + line * ROW_HEIGHT };
+  }
+
+  async function drag(page: Page, from: { x: number; y: number }, dx: number, dy: number) {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + dx, from.y + dy, { steps: 6 });
+    await page.mouse.up();
+  }
+
+  test("열 이름 사이 경계선을 끌면 그 열 너비가 바뀌고, 선택은 그대로이며, undo 한 번에 되돌린다", async ({ page }) => {
+    const at = await border(page, "B");
+    await page.mouse.move(at.x, at.y);
+    expect(await grid(page).evaluate((el) => el.style.cursor)).toBe("col-resize");
+
+    await drag(page, at, 36, 0);
+
+    expect(await colWidth(page, "B")).toBe(COL_WIDTH + 36);
+    expect(await colWidth(page, "C")).toBe(COL_WIDTH);
+    expect((await state(page)).selection).toBe("A1");
+
+    // 넓어진 만큼 오른쪽 열이 밀려서 그린다. 원래 C1 가운데를 누르면 이제 B1이다.
+    await clickCell(page, "C1");
+    await expect(nameBox(page)).toHaveValue("B1");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await colWidth(page, "B")).toBe(COL_WIDTH);
+    await page.keyboard.press("ControlOrMeta+y");
+    expect(await colWidth(page, "B")).toBe(COL_WIDTH + 36);
+  });
+
+  test("여러 열을 고른 채 그 안의 경계선을 끌면 고른 열이 모두 같은 너비가 된다", async ({ page }) => {
+    await clickHeader(page, "B");
+    await clickHeader(page, "D", { shift: true });
+
+    await drag(page, await border(page, "C"), -24, 0);
+
+    expect(await Promise.all(["B", "C", "D", "E"].map((column) => colWidth(page, column)))).toEqual([40, 40, 40, COL_WIDTH]);
+    expect((await state(page)).selection).toBe("B1:D100000");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await Promise.all(["B", "C", "D"].map((column) => colWidth(page, column)))).toEqual([COL_WIDTH, COL_WIDTH, COL_WIDTH]);
+  });
+
+  test("행 번호 사이 경계선을 끌면 행 높이가 바뀌고, 경계선을 두 번 누르면 자동 높이로 돌아간다", async ({ page }) => {
+    const at = await border(page, 2);
+    await page.mouse.move(at.x, at.y);
+    expect(await grid(page).evaluate((el) => el.style.cursor)).toBe("row-resize");
+
+    await drag(page, at, 0, 25);
+    expect(await rowHeight(page, 2)).toBe(ROW_HEIGHT + 25);
+    expect(await rowHeight(page, 3)).toBe(ROW_HEIGHT);
+
+    await page.mouse.dblclick(at.x, at.y + 25);
+    expect(await rowHeight(page, 2)).toBe(ROW_HEIGHT);
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await rowHeight(page, 2)).toBe(ROW_HEIGHT + 25);
+  });
+
+  test("열 경계선을 두 번 누르면 가장 넓은 글자에 맞추고, 빈 열은 기본 너비로 돌린다", async ({ page }) => {
+    await clickCell(page, "L5");
+    await page.keyboard.type("열 너비를 넓히는 아주 긴 글자입니다");
+    await page.keyboard.press("Enter");
+
+    const at = await border(page, "L");
+    await page.mouse.dblclick(at.x, at.y);
+    const fitted = await colWidth(page, "L");
+    expect(fitted).toBeGreaterThan(COL_WIDTH * 2);
+
+    // 글자를 지우고 다시 맞추면 기본 너비가 된다. (넓어진 경계선 자리를 누른다)
+    await clickCell(page, "L5");
+    await page.keyboard.press("Delete");
+    await page.mouse.dblclick(at.x - COL_WIDTH + fitted, at.y);
+    expect(await colWidth(page, "L")).toBe(COL_WIDTH);
+    expect(await cell(page, "L5")).toBe("");
+  });
+
+  test("열을 넣으면 바꾼 너비가 열과 함께 밀리고, 되돌리면 제자리로 온다", async ({ page }) => {
+    await drag(page, await border(page, "B"), 36, 0);
+
+    await clickHeader(page, "A");
+    await page.keyboard.press("ControlOrMeta+Shift+Equal");
+
+    expect(await Promise.all(["A", "B", "C"].map((column) => colWidth(page, column)))).toEqual([COL_WIDTH, COL_WIDTH, COL_WIDTH + 36]);
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await colWidth(page, "B")).toBe(COL_WIDTH + 36);
+  });
+});
+
+test.describe("셀 안 줄바꿈", () => {
+  const rowHeight = (page: Page, row: number) => page.evaluate((row) => window.__excel!.rowHeight(row), row);
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const editor = (page: Page) => page.getByLabel("셀 입력");
+  // 1줄 20px, 줄이 늘 때마다 16px (LINE_HEIGHT)
+  const linesHeight = (lines: number) => lines * 16 + 4;
+
+  test("입력 중 Alt+Enter(Option+Enter)로 줄을 바꾸면 입력창이 커지고, 확정하면 행 높이가 저절로 맞춰진다", async ({ page }) => {
+    await clickCell(page, "L3");
+    await page.keyboard.type("첫 줄");
+    await page.keyboard.press("Alt+Enter");
+    await page.keyboard.type("둘째 줄");
+    await page.keyboard.press("Alt+Enter");
+    await page.keyboard.type("셋째");
+
+    expect((await state(page)).editing).toBe("enter");
+    expect((await editor(page).boundingBox())!.height).toBeGreaterThanOrEqual(linesHeight(3));
+
+    await page.keyboard.press("Enter");
+    expect(await cell(page, "L3")).toBe("첫 줄\n둘째 줄\n셋째");
+    expect(await rowHeight(page, 3)).toBe(linesHeight(3));
+    expect(await rowHeight(page, 4)).toBe(ROW_HEIGHT);
+    await expect(nameBox(page)).toHaveValue("L4");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cell(page, "L3")).toBe("");
+    expect(await rowHeight(page, 3)).toBe(ROW_HEIGHT);
+  });
+
+  test("F2로 여러 줄 셀을 고치면 줄을 지운 만큼 행 높이가 준다", async ({ page }) => {
+    await clickCell(page, "L2");
+    await page.keyboard.type("가");
+    await page.keyboard.press("Alt+Enter");
+    await page.keyboard.type("나");
+    await page.keyboard.press("Enter");
+    expect(await rowHeight(page, 2)).toBe(linesHeight(2));
+
+    await clickCell(page, "L2");
+    await page.keyboard.press("F2");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "L2")).toBe("가");
+    expect(await rowHeight(page, 2)).toBe(ROW_HEIGHT);
+  });
+
+  test("높이를 직접 바꾼 행은 저절로 바뀌지 않고, 경계선을 두 번 누르면 다시 자동이 된다", async ({ page }) => {
+    const box = (await grid(page).boundingBox())!;
+    const border = { x: box.x + HEADER_WIDTH / 2, y: box.y + HEADER_HEIGHT + 3 * ROW_HEIGHT };
+    await page.mouse.move(border.x, border.y);
+    await page.mouse.down();
+    await page.mouse.move(border.x, border.y + 10, { steps: 4 });
+    await page.mouse.up();
+    expect(await rowHeight(page, 3)).toBe(ROW_HEIGHT + 10);
+
+    await clickCell(page, "L3");
+    await page.keyboard.type("하나");
+    await page.keyboard.press("Alt+Enter");
+    await page.keyboard.type("둘");
+    await page.keyboard.press("Alt+Enter");
+    await page.keyboard.type("셋");
+    await page.keyboard.press("Enter");
+    expect(await rowHeight(page, 3)).toBe(ROW_HEIGHT + 10);
+
+    await page.mouse.dblclick(border.x, border.y + 10);
+    expect(await rowHeight(page, 3)).toBe(linesHeight(3));
+  });
+});

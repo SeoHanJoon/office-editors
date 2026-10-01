@@ -207,3 +207,80 @@ describe("StructureCommand", () => {
     expect(() => new StructureCommand(createSheet(), insertRows(1)).undo()).toThrow();
   });
 });
+
+describe("행·열 변경과 줄 크기", () => {
+  /** 2행 높이 40, 4행 높이 60, B열 너비 100 */
+  function sizedSheet(): Sheet {
+    const sheet = createSheet();
+    sheet.setCustomSizes("row", [
+      { index: 1, size: 40 },
+      { index: 3, size: 60 },
+    ]);
+    sheet.setCustomSizes("col", [{ index: 1, size: 100 }]);
+    return sheet;
+  }
+  const rowSizes = (sheet: Sheet) => Object.fromEntries(sheet.customSizes("row"));
+  const colSizes = (sheet: Sheet) => Object.fromEntries(sheet.customSizes("col"));
+
+  test("행을 넣으면 아래 행의 크기가 같이 밀리고, 새 행은 기본 크기다", () => {
+    const sheet = sizedSheet();
+
+    sheet.changeStructure(insertRows(3, 2));
+
+    expect(rowSizes(sheet)).toEqual({ 1: 40, 5: 60 });
+    expect(colSizes(sheet)).toEqual({ 1: 100 });
+  });
+
+  test("행을 지우면 그 행의 크기는 없어지고 아래 행 크기가 당겨진다", () => {
+    const sheet = sizedSheet();
+
+    const result = sheet.changeStructure(deleteRows(2, 2));
+
+    expect(rowSizes(sheet)).toEqual({ 1: 60 });
+    expect(result.removedSizes).toEqual([{ index: 1, size: 40 }]);
+  });
+
+  test("열을 넣고 지우면 열 너비만 옮겨진다", () => {
+    const sheet = sizedSheet();
+
+    sheet.changeStructure(insertCols(0));
+    expect(colSizes(sheet)).toEqual({ 2: 100 });
+    sheet.changeStructure(deleteCols(2));
+    expect(colSizes(sheet)).toEqual({});
+    expect(rowSizes(sheet)).toEqual({ 1: 40, 3: 60 });
+  });
+
+  test("삭제를 undo하면 지운 줄의 크기가 되살아난다", () => {
+    const sheet = sizedSheet();
+    const history = new History();
+
+    history.execute(new StructureCommand(sheet, deleteRows(1, 3)));
+    expect(rowSizes(sheet)).toEqual({ 0: 60 });
+    history.undo();
+    expect(rowSizes(sheet)).toEqual({ 1: 40, 3: 60 });
+
+    history.execute(new StructureCommand(sheet, deleteCols(1)));
+    history.undo();
+    expect(colSizes(sheet)).toEqual({ 1: 100 });
+  });
+
+  test("삽입을 undo·redo하면 크기도 제자리로 돌아간다", () => {
+    const sheet = sizedSheet();
+    const history = new History();
+
+    history.execute(new StructureCommand(sheet, insertRows(1)));
+    expect(rowSizes(sheet)).toEqual({ 2: 40, 4: 60 });
+    history.undo();
+    expect(rowSizes(sheet)).toEqual({ 1: 40, 3: 60 });
+    history.redo();
+    expect(rowSizes(sheet)).toEqual({ 2: 40, 4: 60 });
+  });
+
+  test("되살릴 크기가 새 크기 밖이면 아무것도 바꾸지 않는다", () => {
+    const sheet = sizedSheet();
+
+    expect(() => sheet.changeStructure(deleteRows(1), [], [{ index: 4, size: 30 }])).toThrow(RangeError);
+    expect(sheet.rowCount).toBe(5);
+    expect(rowSizes(sheet)).toEqual({ 1: 40, 3: 60 });
+  });
+});

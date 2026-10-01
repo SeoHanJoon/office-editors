@@ -1,8 +1,9 @@
 import { test } from "vitest";
 import { FormulaEngine } from "./formula-engine";
-import { DEFAULT_LAYOUT } from "./layout";
-import { PERF_ROWS, scoreSheet } from "./perf-sheets";
-import { drawGrid } from "./render";
+import { AutoRowLines } from "./auto-row-lines";
+import { DEFAULT_LAYOUT, gridGeometry, uniformGeometry } from "./layout";
+import { PERF_ROWS, multilineSheet, scoreSheet } from "./perf-sheets";
+import { autoRowHeight, drawGrid } from "./render";
 import { selectCell } from "./selection";
 
 // 스크롤 60fps 측정 방법 ③: 브라우저 없이 drawGrid 한 번의 JS 시간만 잰다.
@@ -41,6 +42,7 @@ test("10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) =
   const engine = new FormulaEngine(sheet);
   const ctx = fakeContext();
   const layout = DEFAULT_LAYOUT;
+  const geometry = uniformGeometry(layout, sheet);
   const selection = selectCell({ row: 0, col: 0 });
   // 한 번 그릴 때마다 한 화면 조금 넘게 내려가며 시트 전체를 돈다. (같은 칸만 그리지 않게)
   const step = 37 * layout.rowHeight;
@@ -48,6 +50,24 @@ test("10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) =
   let scrollTop = 0;
   await bench("drawGrid 한 번", () => {
     scrollTop = (scrollTop + step) % maxTop;
-    drawGrid(ctx, { sheet, engine, selection, layout, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
+  }).run();
+});
+
+test("행마다 높이가 다른 10만 행 한 화면 그리기 (1280×800)", async ({ bench }) => {
+  const sheet = multilineSheet();
+  const engine = new FormulaEngine(sheet);
+  const ctx = fakeContext();
+  const layout = DEFAULT_LAYOUT;
+  const autoRows = new AutoRowLines(sheet);
+  const rowSizes = [...autoRows.entries()].map(([row, lines]) => [row, autoRowHeight(lines, layout.rowHeight)] as const);
+  const geometry = gridGeometry(layout, sheet, rowSizes, []);
+  const selection = selectCell({ row: 0, col: 0 });
+  const step = 800 * 1.1;
+  const maxTop = geometry.rows.total;
+  let scrollTop = 0;
+  await bench("drawGrid 한 번 (여러 줄 셀 포함)", () => {
+    scrollTop = (scrollTop + step) % maxTop;
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
   }).run();
 });
