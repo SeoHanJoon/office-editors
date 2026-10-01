@@ -52,8 +52,8 @@ import {
   type Selection,
 } from "./selection";
 import { SetCellsCommand } from "./set-cells-command";
-import { SetLineSizesCommand } from "./set-line-sizes-command";
-import type { Axis, CellChange, LineSizeChange, Sheet } from "./sheet";
+import { SetCustomSizesCommand } from "./set-custom-sizes-command";
+import type { Axis, CellChange, CustomSizeChange, Sheet } from "./sheet";
 import { canChangeStructure, type StructureChange } from "./structure";
 import { StructureCommand } from "./structure-command";
 
@@ -113,7 +113,7 @@ function sameClipboardText(a: string, b: string): boolean {
  *
  * 오른쪽 클릭, Shift+F10, 메뉴 키로 메뉴(@office/ui의 ContextMenu)를 연다. 메뉴의 복사·붙여넣기는 Clipboard API를 쓴다. (ADR 0029)
  *
- * 머리글 경계선을 끌면 줄 크기를, 두 번 누르면 내용에 맞춘 크기를 SetLineSizesCommand로 바꾼다. 줄 크기는 Sheet에 있다. (ADR 0031)
+ * 머리글 경계선을 끌면 줄 크기를, 두 번 누르면 내용에 맞춘 크기를 SetCustomSizesCommand로 바꾼다. 줄 크기는 Sheet에 있다. (ADR 0031)
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -218,7 +218,7 @@ export class GridView {
     input.addEventListener("contextmenu", this.onKeyboardContextMenu);
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
     this.unsubscribeStructure = sheet.onStructureChange(this.onStructureChange);
-    this.unsubscribeSizes = sheet.onLineSizeChange(this.onLineSizeChange);
+    this.unsubscribeSizes = sheet.onCustomSizeChange(this.onCustomSizeChange);
     // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
     this.unsubscribeEngine = engine.onChange(this.requestRender);
     this.resizeObserver = new ResizeObserver(this.requestRender);
@@ -236,7 +236,7 @@ export class GridView {
   }
 
   /** 화면에 그리는 줄 크기 (CSS px). 직접 바꾸지 않은 줄은 기본(행은 자동) 크기다. */
-  lineSize(axis: Axis, index: number): number {
+  displayedSize(axis: Axis, index: number): number {
     return (axis === "row" ? this.geometry.rows : this.geometry.cols).size(index);
   }
 
@@ -370,12 +370,12 @@ export class GridView {
   private buildGeometry(): GridGeometry {
     const { sheet, layout, autoRows } = this;
     function* rowSizes(): Generator<[number, number]> {
-      yield* sheet.lineSizes("row");
+      yield* sheet.customSizes("row");
       for (const [row, lines] of autoRows.entries()) {
-        if (sheet.lineSize("row", row) === null) yield [row, autoRowHeight(lines, layout.rowHeight)];
+        if (sheet.customSize("row", row) === null) yield [row, autoRowHeight(lines, layout.rowHeight)];
       }
     }
-    return gridGeometry(layout, sheet, rowSizes(), sheet.lineSizes("col"));
+    return gridGeometry(layout, sheet, rowSizes(), sheet.customSizes("col"));
   }
 
   /** 행·열 수나 줄 크기가 바뀌면 위치 계산을 새로 하고 스크롤 크기를 맞춘다. */
@@ -442,7 +442,7 @@ export class GridView {
   /** 경계선을 누르면 끌기를 시작한다. 선택은 그대로 두고, 끄는 동안은 안내선만 그린다. */
   private startResize(event: PointerEvent, handle: ResizeHandle): void {
     const { first, last } = resizeLines(handle, selectionRange(this.currentSelection), this.sheet);
-    const startSize = this.lineSize(handle.axis, handle.index);
+    const startSize = this.displayedSize(handle.axis, handle.index);
     this.resizing = {
       pointer: event.pointerId,
       handle,
@@ -471,9 +471,9 @@ export class GridView {
     this.resizing = null;
     this.requestRender();
     if (!apply || size === startSize) return;
-    const changes: LineSizeChange[] = [];
+    const changes: CustomSizeChange[] = [];
     for (let index = first; index <= last; index++) changes.push({ index, size });
-    this.history.execute(new SetLineSizesCommand(this.sheet, handle.axis, changes));
+    this.history.execute(new SetCustomSizesCommand(this.sheet, handle.axis, changes));
   }
 
   /**
@@ -482,12 +482,12 @@ export class GridView {
    */
   private autoFit(handle: ResizeHandle): void {
     const { first, last } = resizeLines(handle, selectionRange(this.currentSelection), this.sheet);
-    const changes: LineSizeChange[] = [];
+    const changes: CustomSizeChange[] = [];
     for (let index = first; index <= last; index++) {
       const size = handle.axis === "col" ? this.fitColumn(index) : null;
-      if (size !== this.sheet.lineSize(handle.axis, index)) changes.push({ index, size });
+      if (size !== this.sheet.customSize(handle.axis, index)) changes.push({ index, size });
     }
-    if (changes.length > 0) this.history.execute(new SetLineSizesCommand(this.sheet, handle.axis, changes));
+    if (changes.length > 0) this.history.execute(new SetCustomSizesCommand(this.sheet, handle.axis, changes));
   }
 
   /** 열의 모든 행에 보이는 글자 중 가장 넓은 것에 맞춘 너비. 비어 있으면 null */
@@ -512,7 +512,7 @@ export class GridView {
   }
 
   /** 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다. */
-  private readonly onLineSizeChange = (): void => {
+  private readonly onCustomSizeChange = (): void => {
     this.updateGeometry();
     this.placeEditor();
     this.requestRender();

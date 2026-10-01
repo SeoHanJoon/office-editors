@@ -84,8 +84,8 @@ export function Spreadsheet() {
         }),
         cell: (a1) => sheet.get(address(a1)),
         value: (a1) => formatValue(engine.getValue(address(a1))),
-        rowHeight: (row) => view.lineSize("row", row - 1),
-        colWidth: (column) => view.lineSize("col", address(`${column}1`).col),
+        rowHeight: (row) => view.displayedSize("row", row - 1),
+        colWidth: (column) => view.displayedSize("col", address(`${column}1`).col),
       };
     }
     return () => {

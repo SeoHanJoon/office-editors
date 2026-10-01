@@ -27,7 +27,7 @@ export interface CellChange {
 }
 
 /** 줄(행 또는 열) 하나의 크기 변경. size가 null이면 직접 바꾼 크기를 지워 기본(행은 자동) 크기로 돌린다. */
-export interface LineSizeChange {
+export interface CustomSizeChange {
   readonly index: number;
   /** CSS px. 0보다 크다. */
   readonly size: number | null;
@@ -35,8 +35,8 @@ export interface LineSizeChange {
 
 export type Axis = "row" | "col";
 
-/** 직접 바꾼 줄 크기가 바뀐 축과 줄 번호를 받는다. setLineSizes에 넘긴 순서 그대로다. */
-export type LineSizeListener = (axis: Axis, indexes: readonly number[]) => void;
+/** 직접 바꾼 줄 크기가 바뀐 축과 줄 번호를 받는다. setCustomSizes에 넘긴 순서 그대로다. */
+export type CustomSizeListener = (axis: Axis, indexes: readonly number[]) => void;
 
 /** 값이 바뀐 셀 주소를 받는다. setCells에 넘긴 순서 그대로다. */
 export type SheetChangeListener = (addresses: readonly CellAddress[]) => void;
@@ -54,7 +54,7 @@ export interface StructureResult {
   /** 참조를 고친 수식 셀 (변경 뒤 주소와 고치기 전 글자) */
   readonly rewritten: readonly CellChange[];
   /** 지운 줄에 있던 직접 바꾼 크기 (변경 전 줄 번호) */
-  readonly removedSizes: readonly LineSizeChange[];
+  readonly removedSizes: readonly CustomSizeChange[];
 }
 
 /**
@@ -70,7 +70,7 @@ export class Sheet {
   /** 직접 바꾼 행 높이·열 너비 (CSS px). 키는 줄 번호 */
   private sizes: Record<Axis, Map<number, number>> = { row: new Map(), col: new Map() };
   private readonly listeners = new Set<SheetChangeListener>();
-  private readonly sizeListeners = new Set<LineSizeListener>();
+  private readonly sizeListeners = new Set<CustomSizeListener>();
   private readonly structureListeners = new Set<StructureChangeListener>();
 
   constructor({ rowCount, colCount, data = [] }: SheetOptions) {
@@ -157,21 +157,21 @@ export class Sheet {
   }
 
   /** 직접 바꾼 줄 크기 (CSS px). 바꾸지 않았으면 null */
-  lineSize(axis: Axis, index: number): number | null {
+  customSize(axis: Axis, index: number): number | null {
     return this.sizes[axis].get(index) ?? null;
   }
 
   /** 직접 바꾼 줄을 [줄 번호, 크기]로 훑는다. 순서는 정해져 있지 않다. */
-  lineSizes(axis: Axis): IterableIterator<[number, number]> {
+  customSizes(axis: Axis): IterableIterator<[number, number]> {
     return this.sizes[axis].entries();
   }
 
   /**
    * 한 축의 줄 크기를 한 번에 바꾸고 변경을 한 번 알린다.
-   * 편집은 SetLineSizesCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
+   * 편집은 SetCustomSizesCommand를 거쳐야 undo가 된다. 이 메서드는 Command 안에서만 부른다.
    * 시트 밖 줄이 있거나 크기가 0보다 큰 수가 아니면 아무것도 바꾸지 않고 RangeError를 던진다.
    */
-  setLineSizes(axis: Axis, changes: readonly LineSizeChange[]): void {
+  setCustomSizes(axis: Axis, changes: readonly CustomSizeChange[]): void {
     const count = axis === "row" ? this.rows : this.cols;
     for (const { index, size } of changes) {
       if (!Number.isInteger(index) || index < 0 || index >= count) {
@@ -190,7 +190,7 @@ export class Sheet {
   }
 
   /** 직접 바꾼 줄 크기가 바뀔 때마다 listener를 부른다. 행·열을 넣고 지울 때는 부르지 않는다. (onStructureChange로 안다) */
-  onLineSizeChange(listener: LineSizeListener): () => void {
+  onCustomSizeChange(listener: CustomSizeListener): () => void {
     this.sizeListeners.add(listener);
     return () => this.sizeListeners.delete(listener);
   }
@@ -207,7 +207,7 @@ export class Sheet {
   changeStructure(
     change: StructureChange,
     cells: readonly CellChange[] = [],
-    sizes: readonly LineSizeChange[] = [],
+    sizes: readonly CustomSizeChange[] = [],
   ): StructureResult {
     if (!canChangeStructure(change, this)) {
       throw new RangeError(`시트(${this.rows}행 × ${this.cols}열)에서 할 수 없는 행·열 변경이다: ${JSON.stringify(change)}`);
@@ -261,7 +261,7 @@ export class Sheet {
 
     // 줄 크기는 바뀐 축만 옮긴다.
     const nextSizes = new Map<number, number>();
-    const removedSizes: LineSizeChange[] = [];
+    const removedSizes: CustomSizeChange[] = [];
     for (const [line, size] of this.sizes[change.axis]) {
       const after = lineAfter(change, line);
       if (after === null) removedSizes.push({ index: line, size });

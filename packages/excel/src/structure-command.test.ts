@@ -212,15 +212,15 @@ describe("행·열 변경과 줄 크기", () => {
   /** 2행 높이 40, 4행 높이 60, B열 너비 100 */
   function sizedSheet(): Sheet {
     const sheet = createSheet();
-    sheet.setLineSizes("row", [
+    sheet.setCustomSizes("row", [
       { index: 1, size: 40 },
       { index: 3, size: 60 },
     ]);
-    sheet.setLineSizes("col", [{ index: 1, size: 100 }]);
+    sheet.setCustomSizes("col", [{ index: 1, size: 100 }]);
     return sheet;
   }
-  const rowSizes = (sheet: Sheet) => Object.fromEntries(sheet.lineSizes("row"));
-  const colSizes = (sheet: Sheet) => Object.fromEntries(sheet.lineSizes("col"));
+  const rowSizes = (sheet: Sheet) => Object.fromEntries(sheet.customSizes("row"));
+  const colSizes = (sheet: Sheet) => Object.fromEntries(sheet.customSizes("col"));
 
   test("행을 넣으면 아래 행의 크기가 같이 밀리고, 새 행은 기본 크기다", () => {
     const sheet = sizedSheet();
