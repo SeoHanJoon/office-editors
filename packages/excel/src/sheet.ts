@@ -232,6 +232,11 @@ export class Sheet {
     return () => this.sizeListeners.delete(listener);
   }
 
+  /** 셀·행·열 서식이 하나라도 있는지. 없으면 모든 칸이 기본 서식이다. */
+  get hasFormats(): boolean {
+    return this.cellFormatIds.size > 0 || this.lineFormatIds.row.size > 0 || this.lineFormatIds.col.size > 0;
+  }
+
   /** 칸에 보이는 서식. 셀 서식 → 행 서식 → 열 서식 → 기본 서식 순서로 처음 찾은 것이다. */
   format({ row, col }: CellAddress): CellFormat {
     const { cellFormatIds, lineFormatIds } = this;

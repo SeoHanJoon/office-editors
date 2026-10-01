@@ -1,8 +1,17 @@
 import type { History } from "@office/command-core";
 import { ContextMenu } from "@office/ui";
-import type { CellAddress, CellRange } from "./address";
-import { AutoRowLines } from "./auto-row-lines";
+import { parseA1, type CellAddress, type CellRange } from "./address";
+import { AutoRowHeights } from "./auto-row-heights";
 import { CellEditor } from "./cell-editor";
+import {
+  CLEAR_FORMAT,
+  DEFAULT_FORMAT,
+  changeDecimals,
+  fontFor,
+  formatCellValue,
+  type CellFormat,
+  type FormatPatch,
+} from "./cell-format";
 import {
   copyText,
   fitsSheet,
@@ -22,6 +31,15 @@ import {
   fillEntryChanges,
   type FillDrag,
 } from "./fill";
+import {
+  borderChanges,
+  copyFillFormatChanges,
+  fillFormatChanges,
+  moveFormatChanges,
+  pasteFormatChanges,
+  patchFormatChanges,
+  type BorderKind,
+} from "./format-edit";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
 import { formatValue } from "./formula-value";
@@ -43,7 +61,7 @@ import {
   type GridLayout,
   type Viewport,
 } from "./layout";
-import { CELL_FONT, CELL_PADDING, THEME, autoRowHeight, drawGrid } from "./render";
+import { CELL_FONT, CELL_PADDING, FONT_FAMILY, THEME, drawGrid } from "./render";
 import { draggedSize, fitColumnWidth, pointToResizeHandle, resizeLines, type ResizeHandle } from "./resize";
 import {
   clampSelection,
@@ -63,7 +81,8 @@ import {
 } from "./selection";
 import { SetCellsCommand } from "./set-cells-command";
 import { SetCustomSizesCommand } from "./set-custom-sizes-command";
-import type { Axis, CellChange, CustomSizeChange, Sheet } from "./sheet";
+import { SetFormatsCommand } from "./set-formats-command";
+import type { Axis, CellChange, CustomSizeChange, FormatChanges, Sheet } from "./sheet";
 import { canChangeStructure, type StructureChange } from "./structure";
 import { StructureCommand } from "./structure-command";
 
@@ -76,6 +95,20 @@ export interface GridViewOptions {
 }
 
 type SelectionListener = (selection: Selection) => void;
+
+/** 셀 입력 상태. 수식 입력줄이 셀 입력창과 같은 글자를 보여 줄 때 쓴다. (ADR 0035) */
+export interface EditState {
+  /** 입력 중인 셀 */
+  readonly address: CellAddress;
+  readonly mode: EditMode;
+  /** 입력창에 든 글자 (한글 조합 중인 글자 포함) */
+  readonly text: string;
+}
+
+type EditListener = (edit: EditState | null) => void;
+
+/** 툴바에서 켜고 끄는 글자 서식 */
+export type FormatToggle = "bold" | "italic" | "underline" | "strike";
 
 /** 이 화면에서 복사하거나 잘라낸 범위. 클립보드에 넣은 글자와 함께 기억한다. */
 interface Copied {
@@ -135,6 +168,10 @@ function sameClipboardText(a: string, b: string): boolean {
  * 머리글 경계선을 끌면 줄 크기를, 두 번 누르면 내용에 맞춘 크기를 SetCustomSizesCommand로 바꾼다. 줄 크기는 Sheet에 있다. (ADR 0031)
  *
  * 선택 범위 오른쪽 아래의 채우기 핸들을 끌면 값을 이어 채우거나(범위 밖) 지우고(범위 안), 두 번 누르면 옆 열에 값이 있는 곳까지 아래로 채운다. (ADR 0033)
+ *
+ * 서식은 SetFormatsCommand로 바꾼다. 툴바는 applyFormat 등 공개 메서드로 고른 범위에 서식을 준다. (ADR 0034, 0035)
+ * 앱 안 붙여넣기·잘라내기·채우기·Ctrl+D/R은 값과 서식을 history.batch로 묶어 undo 한 번에 되돌린다.
+ * 수식 입력줄은 onEditChange로 입력 상태를 받고 setEditText·commitEdit·cancelEdit로 같은 입력을 고친다.
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -143,8 +180,8 @@ export class GridView {
   private readonly layout: GridLayout;
   /** 머리글과 줄마다의 크기. 행·열 수나 줄 크기가 바뀌면 새로 만든다. */
   private geometry: GridGeometry;
-  /** 줄바꿈이 든 셀 때문에 저절로 높아지는 행. 셀 글자에서 계산하고 저장하지 않는다. (ADR 0031) */
-  private readonly autoRows: AutoRowLines;
+  /** 줄바꿈·자동 줄바꿈·큰 글자 때문에 저절로 높아지는 행. 셀 글자와 서식에서 계산하고 저장하지 않는다. (ADR 0031, 0036) */
+  private readonly autoRows: AutoRowHeights;
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly scroller: HTMLDivElement;
@@ -160,8 +197,10 @@ export class GridView {
   private readonly unsubscribeSheet: () => void;
   private readonly unsubscribeStructure: () => void;
   private readonly unsubscribeSizes: () => void;
+  private readonly unsubscribeFormats: () => void;
   private readonly unsubscribeEngine: () => void;
   private readonly listeners = new Set<SelectionListener>();
+  private readonly editListeners = new Set<EditListener>();
   private currentSelection: Selection = selectCell({ row: 0, col: 0 });
   private frame = 0;
   /** 드래그로 범위를 고르는 중이면 그 포인터 id */
@@ -170,7 +209,7 @@ export class GridView {
   private resizing: Resizing | null = null;
   /** 채우기 핸들을 끄는 중이면 그 상태 */
   private filling: Filling | null = null;
-  /** 글자 너비를 재는 데 쓰는 캔버스 (열 너비 자동 맞춤) */
+  /** 글자 너비를 재는 데 쓰는 캔버스 (열 너비 자동 맞춤, 자동 줄바꿈 행 높이) */
   private measureContext: CanvasRenderingContext2D | null = null;
   /** 드래그로 고르는 것: 셀 범위, 또는 머리글을 눌러 시작한 행·열 전체 */
   private dragKind: "cell" | "row" | "col" = "cell";
@@ -189,7 +228,16 @@ export class GridView {
     this.engine = engine;
     this.history = history;
     this.layout = layout;
-    this.autoRows = new AutoRowLines(sheet);
+    this.autoRows = new AutoRowHeights(
+      sheet,
+      {
+        value: (address) => engine.getValue(address),
+        // 열 너비는 행 높이와 상관없으므로 위치 계산(geometry)을 기다리지 않고 바로 읽는다.
+        colWidth: (col) => sheet.customSize("col", col) ?? layout.colWidth,
+        measure: (text, font) => this.measure(text, font),
+      },
+      layout.rowHeight,
+    );
     this.geometry = this.buildGeometry();
 
     this.root = document.createElement("div");
@@ -242,8 +290,9 @@ export class GridView {
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
     this.unsubscribeStructure = sheet.onStructureChange(this.onStructureChange);
     this.unsubscribeSizes = sheet.onCustomSizeChange(this.onCustomSizeChange);
+    this.unsubscribeFormats = sheet.onFormatChange(this.onFormatChange);
     // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
-    this.unsubscribeEngine = engine.onChange(this.requestRender);
+    this.unsubscribeEngine = engine.onChange(this.onEngineChange);
     this.resizeObserver = new ResizeObserver(this.requestRender);
     this.resizeObserver.observe(this.scroller);
     this.render();
@@ -279,6 +328,130 @@ export class GridView {
     return () => this.listeners.delete(listener);
   }
 
+  /** 셀 입력 중이면 그 상태, 아니면 null */
+  get editState(): EditState | null {
+    const { address, mode } = this.editor;
+    return address && mode ? { address, mode, text: this.editor.text } : null;
+  }
+
+  /** 입력을 시작하거나 끝낼 때, 입력 중 글자가 바뀔 때 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
+  onEditChange(listener: EditListener): () => void {
+    this.editListeners.add(listener);
+    return () => this.editListeners.delete(listener);
+  }
+
+  /**
+   * 수식 입력줄에서 친 글자로 입력을 바꾼다. 입력 중이 아니면 활성 셀의 "edit" 입력을 그 글자로 시작한다.
+   * 셀 입력창에도 같은 글자가 보인다. 포커스는 옮기지 않는다.
+   */
+  setEditText(text: string): void {
+    if (this.editor.mode) {
+      this.editor.setText(text);
+      this.notifyEdit();
+    } else {
+      this.startEditing("edit", text);
+    }
+    this.requestRender();
+  }
+
+  /**
+   * 수식 입력줄에서 입력을 확정한다. 셀 입력창의 Enter(key "Enter")·Tab과 같이 확정한 뒤 옮기고 표에 포커스를 준다.
+   * 틀린 수식이라 확정하지 못하면 false (알림은 셀 입력창 아래에 뜬다)
+   */
+  commitEdit(key: "Enter" | "Tab", shiftKey = false): boolean {
+    if (!this.editor.mode) return true;
+    if (!this.commit()) return false;
+    const result = navigate(
+      this.currentSelection,
+      { key, code: key, shiftKey, ctrlKey: false, metaKey: false, altKey: false },
+      { sheet: this.sheet, pageRows: pageRows(this.geometry, this.viewport()) },
+    );
+    if (result) this.select(result.selection, "active");
+    this.focus();
+    return true;
+  }
+
+  /** 수식 입력줄에서 입력을 취소한다. (Esc) 표에 포커스를 준다. */
+  cancelEdit(): void {
+    if (this.editor.mode) {
+      this.editor.stop();
+      this.notifyEdit();
+      this.requestRender();
+    }
+    this.focus();
+  }
+
+  /**
+   * 이름 상자: "B3"이나 "B3:D5"로 이동해 고른다. 소문자도 된다. 주소가 틀렸거나 시트 밖이면 false
+   * 입력 중이면 먼저 확정하고, 확정하지 못하면 false
+   */
+  goTo(reference: string): boolean {
+    const [start, end = start, extra] = reference.trim().split(":");
+    if (extra !== undefined) return false;
+    const from = parseA1(start!);
+    const to = parseA1(end!);
+    if (!from || !to) return false;
+    const inside = (a: CellAddress) => a.row < this.sheet.rowCount && a.col < this.sheet.colCount;
+    if (!inside(from) || !inside(to)) return false;
+    if (!this.commit()) return false;
+    const range = {
+      top: Math.min(from.row, to.row),
+      left: Math.min(from.col, to.col),
+      bottom: Math.max(from.row, to.row),
+      right: Math.max(from.col, to.col),
+    };
+    this.select({ ...selectRange(range), active: from }, "active");
+    return true;
+  }
+
+  /** 활성 셀에 보이는 서식. 툴바 버튼 상태에 쓴다. */
+  get activeFormat(): CellFormat {
+    return this.sheet.format(this.currentSelection.active);
+  }
+
+  /** 고른 범위에 서식을 준다. (undo 한 번) 입력 중이면 먼저 확정하고, 확정할 수 없으면 하지 않는다. */
+  applyFormat(patch: FormatPatch): void {
+    this.applyFormatChanges((range) => patchFormatChanges(this.sheet, range, patch));
+  }
+
+  /** 글자 서식을 켜고 끈다. 활성 셀이 켜져 있으면 고른 범위 모두 끄고, 아니면 모두 켠다. (Excel과 같음) */
+  toggleFormat(key: FormatToggle): void {
+    this.applyFormat({ [key]: !this.activeFormat[key] });
+  }
+
+  /** 고른 범위의 서식을 모두 기본으로 돌린다. 값은 그대로다. */
+  clearFormat(): void {
+    this.applyFormat(CLEAR_FORMAT);
+  }
+
+  /** 고른 범위에 테두리를 준다. */
+  applyBorders(kind: BorderKind): void {
+    this.applyFormatChanges((range) => borderChanges(this.sheet, range, kind));
+  }
+
+  /**
+   * 소수 자릿수를 delta만큼 늘리거나 줄인다. 활성 셀의 숫자 형식에서 정한 형식을 고른 범위 모두에 준다. (Excel과 같음)
+   * 활성 셀이 일반 형식이면 지금 보이는 숫자의 자릿수에서 시작한다.
+   */
+  changeDecimals(delta: number): void {
+    if (!this.commit()) return;
+    const { active } = this.currentSelection;
+    const format = this.sheet.format(active);
+    const shown = formatCellValue(this.engine.getValue(active), format);
+    this.applyFormat({ numberFormat: changeDecimals(format.numberFormat ?? { kind: "general" }, delta, shown) });
+  }
+
+  private applyFormatChanges(build: (range: CellRange) => FormatChanges): void {
+    if (!this.commit()) return;
+    this.apply([], false, build(selectionRange(this.currentSelection)));
+    this.requestRender();
+  }
+
+  private notifyEdit(): void {
+    const state = this.editState;
+    for (const listener of this.editListeners) listener(state);
+  }
+
   /** 키보드 입력을 받도록 표에 포커스를 준다. */
   focus(): void {
     this.editor.focus();
@@ -292,8 +465,10 @@ export class GridView {
     this.unsubscribeSheet();
     this.unsubscribeStructure();
     this.unsubscribeSizes();
+    this.unsubscribeFormats();
     this.unsubscribeEngine();
     this.listeners.clear();
+    this.editListeners.clear();
     this.root.remove();
   }
 
@@ -334,15 +509,20 @@ export class GridView {
   }
 
   /**
-   * 편집 한 번을 실행하고 기록한다.
+   * 편집 한 번을 실행하고 기록한다. 서식 변경(formats)도 있으면 값과 묶어 undo 한 번에 되돌린다.
    * 복사한 범위 표시는 지운다. (Excel처럼 다른 편집을 하면 복사 상태가 풀린다) 복사한 것을 붙여넣을 때만 keepCopied로 남긴다.
    */
-  private apply(changes: readonly CellChange[], keepCopied = false): void {
+  private apply(changes: readonly CellChange[], keepCopied = false, formats?: FormatChanges): void {
     if (!keepCopied) this.clearCopied();
-    if (changes.length === 0) return;
+    const formatCommand = formats ? new SetFormatsCommand(this.sheet, formats) : null;
+    const withFormats = formatCommand !== null && !formatCommand.empty;
+    if (changes.length === 0 && !withFormats) return;
     this.applying = true;
     try {
-      this.history.execute(new SetCellsCommand(this.sheet, changes));
+      this.history.batch(() => {
+        if (changes.length > 0) this.history.execute(new SetCellsCommand(this.sheet, changes));
+        if (withFormats) this.history.execute(formatCommand);
+      });
     } finally {
       this.applying = false;
     }
@@ -352,9 +532,10 @@ export class GridView {
   private startEditing(mode: EditMode, text?: string): void {
     const address = this.currentSelection.active;
     this.reveal(address);
-    this.editor.start(address, mode, text);
+    this.editor.start(address, mode, text, this.sheet.format(address));
     this.placeEditor();
     this.requestRender();
+    this.notifyEdit();
   }
 
   /**
@@ -373,6 +554,7 @@ export class GridView {
     }
     const edit = this.editor.stop();
     if (!edit) return true;
+    this.notifyEdit();
     const changes = fill
       ? fillEntryChanges(edit.text, edit.address, selectionRange(this.currentSelection))
       : [{ address: edit.address, value: edit.text }];
@@ -393,13 +575,13 @@ export class GridView {
     this.apply(changes);
   }
 
-  /** 행 높이는 직접 바꾼 높이, 없으면 줄바꿈에 맞춘 자동 높이다. 직접 바꾼 행은 저절로 바뀌지 않는다. (Excel과 같음) */
+  /** 행 높이는 직접 바꾼 높이, 없으면 내용에 맞춘 자동 높이다. 직접 바꾼 행은 저절로 바뀌지 않는다. (Excel과 같음) */
   private buildGeometry(): GridGeometry {
     const { sheet, layout, autoRows } = this;
     function* rowSizes(): Generator<[number, number]> {
       yield* sheet.customSizes("row");
-      for (const [row, lines] of autoRows.entries()) {
-        if (sheet.customSize("row", row) === null) yield [row, autoRowHeight(lines, layout.rowHeight)];
+      for (const [row, height] of autoRows.entries()) {
+        if (sheet.customSize("row", row) === null) yield [row, height];
       }
     }
     return gridGeometry(layout, sheet, rowSizes(), sheet.customSizes("col"));
@@ -518,25 +700,33 @@ export class GridView {
     if (changes.length > 0) this.history.execute(new SetCustomSizesCommand(this.sheet, handle.axis, changes));
   }
 
-  /** 열의 모든 행에 보이는 글자 중 가장 넓은 것에 맞춘 너비. 비어 있으면 null */
+  /** 열의 모든 행에 보이는 글자 중 가장 넓은 것에 맞춘 너비. 칸마다 서식의 글꼴로 잰다. 비어 있으면 null */
   private fitColumn(col: number): number | null {
     const { sheet, engine } = this;
-    if (!this.measureContext) {
-      this.measureContext = document.createElement("canvas").getContext("2d");
-      if (!this.measureContext) return null;
-    }
-    const ctx = this.measureContext;
-    ctx.font = THEME.font;
     return fitColumnWidth(
       sheet.rowCount,
       (row) => {
         const address = { row, col };
         const input = sheet.get(address);
-        return input === "" ? null : [input, formatValue(engine.getValue(address))];
+        if (input === "") return null;
+        const format = sheet.format(address);
+        const value = engine.getValue(address);
+        return format === DEFAULT_FORMAT
+          ? [input, formatValue(value)]
+          : [input, formatCellValue(value, format), fontFor(format, FONT_FAMILY)];
       },
-      (text) => ctx.measureText(text).width,
+      (text, font) => this.measure(text, font ?? THEME.font),
       CELL_PADDING,
     );
+  }
+
+  /** font로 쓴 글자 너비 (px). 캔버스를 못 만들면 글자당 7px로 어림한다. */
+  private measure(text: string, font: string): number {
+    this.measureContext ??= document.createElement("canvas").getContext("2d");
+    const ctx = this.measureContext;
+    if (!ctx) return text.length * 7;
+    if (ctx.font !== font) ctx.font = font;
+    return ctx.measureText(text).width;
   }
 
   /**
@@ -575,7 +765,8 @@ export class GridView {
     this.requestRender();
     if (!apply || !drag) return;
     if (drag.kind === "fill") {
-      this.apply(fillChanges(this.sheet, source, drag.direction, drag.count));
+      const formats = fillFormatChanges(this.sheet, source, drag.direction, drag.count);
+      this.apply(fillChanges(this.sheet, source, drag.direction, drag.count), false, formats);
       this.selectFilled(drag.range);
     } else {
       this.apply(clearChanges(this.sheet, drag.cleared));
@@ -587,7 +778,8 @@ export class GridView {
   private autoFillDown(source: CellRange): void {
     const end = autoFillEnd(this.sheet, source);
     if (end === null) return;
-    this.apply(fillChanges(this.sheet, source, "down", end - source.bottom));
+    const count = end - source.bottom;
+    this.apply(fillChanges(this.sheet, source, "down", count), false, fillFormatChanges(this.sheet, source, "down", count));
     this.selectFilled({ ...source, bottom: end });
   }
 
@@ -599,10 +791,36 @@ export class GridView {
     this.select(inside ? { ...selection, active } : selection, "none");
   }
 
-  /** 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다. */
-  private readonly onCustomSizeChange = (): void => {
+  /**
+   * 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다.
+   * 열 너비가 바뀌면 자동 줄바꿈 셀의 줄 수가 바뀌므로 자동 행 높이를 다시 잰다.
+   */
+  private readonly onCustomSizeChange = (axis: Axis): void => {
+    if (axis === "col" && this.sheet.hasFormats) this.autoRows.rebuild();
     this.updateGeometry();
     this.placeEditor();
+    this.requestRender();
+  };
+
+  /**
+   * 서식이 바뀌면(undo/redo 포함) 행 높이를 다시 맞추고 다시 그린다. 선택은 그대로 둔다.
+   * 줄 서식이 바뀌면 그 줄의 모든 셀이 바뀌므로 시트를 다시 훑는다.
+   */
+  private readonly onFormatChange = (changes: FormatChanges): void => {
+    const lines = (changes.rows?.length ?? 0) + (changes.cols?.length ?? 0) > 0;
+    if (lines) {
+      this.autoRows.rebuild();
+      this.updateGeometry();
+    } else if (this.autoRows.update((changes.cells ?? []).map(({ address }) => address))) {
+      this.updateGeometry();
+    }
+    this.placeEditor();
+    this.requestRender();
+  };
+
+  /** 계산값이 바뀌면 다시 그린다. 자동 줄바꿈 셀은 보이는 값에 맞춰 행 높이도 바꾼다. (ADR 0036) */
+  private readonly onEngineChange = (addresses: readonly CellAddress[]): void => {
+    if (this.autoRows.updateValues(addresses)) this.updateGeometry();
     this.requestRender();
   };
 
@@ -658,12 +876,13 @@ export class GridView {
         right: selected.left + range.right - range.left,
       };
       if (!fitsSheet(this.sheet, target)) return;
-      this.apply(moveChanges(this.sheet, range, target.top, target.left));
+      const formats = moveFormatChanges(this.sheet, range, target.top, target.left);
+      this.apply(moveChanges(this.sheet, range, target.top, target.left), false, formats);
     } else if (copied) {
       const { range } = copied;
       target = pasteArea(selected, range.bottom - range.top + 1, range.right - range.left + 1);
       if (!fitsSheet(this.sheet, target)) return;
-      this.apply(pasteCopyChanges(this.sheet, range, target), true);
+      this.apply(pasteCopyChanges(this.sheet, range, target), true, pasteFormatChanges(this.sheet, range, target));
     } else {
       if (text === "") return;
       const values = parseClipboardText(text);
@@ -714,8 +933,18 @@ export class GridView {
         return;
       case "fillDown":
       case "fillRight":
+      {
         event.preventDefault(); // 브라우저 북마크·새로고침
-        this.apply(copyFillChanges(this.sheet, selectionRange(this.currentSelection), action === "fillDown" ? "down" : "right"));
+        const range = selectionRange(this.currentSelection);
+        const direction = action === "fillDown" ? "down" : "right";
+        this.apply(copyFillChanges(this.sheet, range, direction), false, copyFillFormatChanges(this.sheet, range, direction));
+        return;
+      }
+      case "bold":
+      case "italic":
+      case "underline":
+        event.preventDefault(); // 브라우저의 굵게·기울임·밑줄(편집 가능한 곳), 북마크 막대 등
+        this.toggleFormat(action);
         return;
       case "undo":
         event.preventDefault();
@@ -768,8 +997,10 @@ export class GridView {
         if (this.filling) {
           this.scroller.releasePointerCapture(this.filling.pointer);
           this.finishFill(false);
-        } else if (this.editor.mode) this.editor.stop();
-        else this.clearCopied();
+        } else if (this.editor.mode) {
+          this.editor.stop();
+          this.notifyEdit();
+        } else this.clearCopied();
         this.requestRender();
         return;
       case "block":
@@ -803,9 +1034,13 @@ export class GridView {
     if (event.inputType !== "insertText" && event.inputType !== "insertCompositionText") event.preventDefault();
   };
 
-  /** 입력 중이 아닐 때 글자가 들어오면 "enter" 입력을 시작한다. */
+  /** 입력 중이 아닐 때 글자가 들어오면 "enter" 입력을 시작한다. 입력 중이면 수식 입력줄에 바뀐 글자를 알린다. */
   private readonly onInput = (): void => {
-    if (!this.editor.mode && this.editor.text !== "") this.startEditing("enter");
+    if (!this.editor.mode) {
+      if (this.editor.text !== "") this.startEditing("enter");
+      return;
+    }
+    this.notifyEdit();
   };
 
   /** 한글 조합이 시작되면 입력창을 보이게만 한다. 조합 중인 글자는 건드리지 않는다. */

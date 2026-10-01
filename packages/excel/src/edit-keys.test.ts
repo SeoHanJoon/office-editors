@@ -165,3 +165,28 @@ describe("입력 중일 때", () => {
     }
   });
 });
+
+describe("글자 서식 단축키", () => {
+  const key = (k: string, mods: Partial<KeyInput> = {}): KeyInput => ({
+    key: k,
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    ...mods,
+  });
+
+  test("Ctrl/Cmd+B·I·U는 굵게·기울임·밑줄이다", () => {
+    expect(editAction(key("b", { ctrlKey: true }), null)).toBe("bold");
+    expect(editAction(key("i", { metaKey: true }), null)).toBe("italic");
+    expect(editAction(key("u", { ctrlKey: true }), null)).toBe("underline");
+  });
+
+  test("한글 자판에서도 자판 위치로 알아본다", () => {
+    expect(editAction(key("ㅠ", { ctrlKey: true, code: "KeyB" }), null)).toBe("bold");
+  });
+
+  test("입력 중에는 브라우저에 맡긴다", () => {
+    expect(editAction(key("b", { ctrlKey: true }), "enter")).toBeNull();
+  });
+});

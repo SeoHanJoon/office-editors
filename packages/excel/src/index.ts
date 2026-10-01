@@ -28,7 +28,7 @@ export type { EditMode } from "./edit-keys";
 export { type BorderKind } from "./format-edit";
 export { FormulaEngine, type FormulaChangeListener, type FormulaEngineOptions } from "./formula-engine";
 export { FormulaError, formatValue, type CellValue, type ErrorCode } from "./formula-value";
-export { GridView, type GridViewOptions } from "./grid-view";
+export { GridView, type EditState, type FormatToggle, type GridViewOptions } from "./grid-view";
 export { DEFAULT_LAYOUT, type GridLayout } from "./layout";
 export { selectCell, selectRange, selectionRange, type Selection } from "./selection";
 export { SetCellsCommand } from "./set-cells-command";

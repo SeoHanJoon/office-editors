@@ -66,17 +66,17 @@ export function textLines(input: string, shown: string): string[] {
   return isFormula(input) || !shown.includes("\n") ? [shown] : shown.split(/\r\n|\r|\n/);
 }
 
-/** 열 너비 자동 맞춤에 쓰는 셀 읽기. 행마다 [입력한 글자, 보이는 글자]. 빈 셀은 null */
-export type ColumnCells = (row: number) => readonly [input: string, shown: string] | null;
+/** 열 너비 자동 맞춤에 쓰는 셀 읽기. 행마다 [입력한 글자, 보이는 글자, 글꼴(없으면 기본)]. 빈 셀은 null */
+export type ColumnCells = (row: number) => readonly [input: string, shown: string, font?: string] | null;
 
 /**
  * 열의 모든 행(rowCount개)에 보이는 글자 중 가장 넓은 줄에 맞춘 너비. 칸이 모두 비어 있으면 null (기본 너비로 돌린다)
- * measure는 글자 너비(px)를 잰다. 같은 글자는 한 번만 잰다.
+ * measure는 font로 쓴 글자 너비(px)를 잰다. 같은 글꼴의 같은 글자는 한 번만 잰다.
  */
 export function fitColumnWidth(
   rowCount: number,
   cells: ColumnCells,
-  measure: (text: string) => number,
+  measure: (text: string, font: string | undefined) => number,
   padding: number,
 ): number | null {
   const widths = new Map<string, number>();
@@ -84,11 +84,13 @@ export function fitColumnWidth(
   for (let row = 0; row < rowCount; row++) {
     const cell = cells(row);
     if (!cell) continue;
+    const font = cell[2];
     for (const line of textLines(cell[0], cell[1])) {
-      let width = widths.get(line);
+      const key = font === undefined ? line : `${font}\u0000${line}`;
+      let width = widths.get(key);
       if (width === undefined) {
-        width = measure(line);
-        widths.set(line, width);
+        width = measure(line, font);
+        widths.set(key, width);
       }
       if (width > widest) widest = width;
     }

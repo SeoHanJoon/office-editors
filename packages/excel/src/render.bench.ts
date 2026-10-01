@@ -1,9 +1,9 @@
 import { test } from "vitest";
 import { FormulaEngine } from "./formula-engine";
-import { AutoRowLines } from "./auto-row-lines";
+import { AutoRowHeights } from "./auto-row-heights";
 import { DEFAULT_LAYOUT, gridGeometry, uniformGeometry } from "./layout";
 import { PERF_ROWS, multilineSheet, scoreSheet } from "./perf-sheets";
-import { autoRowHeight, drawGrid } from "./render";
+import { drawGrid } from "./render";
 import { selectCell } from "./selection";
 
 // 스크롤 60fps 측정 방법 ③: 브라우저 없이 drawGrid 한 번의 JS 시간만 잰다.
@@ -26,6 +26,7 @@ function fakeContext(): CanvasRenderingContext2D {
     strokeRect: noop,
     fillText: noop,
     setTransform: noop,
+    fill: noop,
     measureText: (text: string) => ({ width: text.length * 7 }),
     fillStyle: "",
     strokeStyle: "",
@@ -59,8 +60,12 @@ test("행마다 높이가 다른 10만 행 한 화면 그리기 (1280×800)", as
   const engine = new FormulaEngine(sheet);
   const ctx = fakeContext();
   const layout = DEFAULT_LAYOUT;
-  const autoRows = new AutoRowLines(sheet);
-  const rowSizes = [...autoRows.entries()].map(([row, lines]) => [row, autoRowHeight(lines, layout.rowHeight)] as const);
+  const autoRows = new AutoRowHeights(
+    sheet,
+    { value: (address) => engine.getValue(address), colWidth: () => layout.colWidth, measure: (text) => text.length * 7 },
+    layout.rowHeight,
+  );
+  const rowSizes = [...autoRows.entries()];
   const geometry = gridGeometry(layout, sheet, rowSizes, []);
   const selection = selectCell({ row: 0, col: 0 });
   const step = 800 * 1.1;
