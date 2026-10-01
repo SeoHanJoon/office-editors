@@ -40,6 +40,8 @@ export type EditAction =
   | "selectColumns"
   /** 활성 셀 옆에 오른쪽 클릭 메뉴를 연다. (Shift+F10, 메뉴 키) */
   | "openMenu"
+  /** 입력 중에 커서 자리에 셀 안 줄바꿈을 넣는다. (Alt+Enter, Mac은 Option+Enter) */
+  | "newline"
   | "block";
 
 /**
@@ -78,8 +80,9 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
     case "Escape":
       return "cancel";
     case "Enter":
-      // Alt+Enter(셀 안 줄바꿈), Ctrl+Enter(범위 채우기)는 아직 없다. 입력창에 줄바꿈이 들어가지 않게 막는다.
-      return plain ? "commit" : "block";
+      if (plain) return "commit";
+      // Ctrl+Enter(범위 채우기)는 아직 없다. 입력창에 줄바꿈이 들어가지 않게 막는다.
+      return input.altKey && !mod ? "newline" : "block";
     case "Tab":
       return mod ? null : "commit";
     case "F2":

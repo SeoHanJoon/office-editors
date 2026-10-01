@@ -1,6 +1,7 @@
 import type { History } from "@office/command-core";
 import { ContextMenu } from "@office/ui";
 import type { CellAddress, CellRange } from "./address";
+import { AutoRowLines } from "./auto-row-lines";
 import { CellEditor } from "./cell-editor";
 import {
   copyText,
@@ -32,7 +33,7 @@ import {
   type GridLayout,
   type Viewport,
 } from "./layout";
-import { CELL_FONT, CELL_PADDING, THEME, drawGrid } from "./render";
+import { CELL_FONT, CELL_PADDING, THEME, autoRowHeight, drawGrid } from "./render";
 import { draggedSize, fitColumnWidth, pointToResizeHandle, resizeLines, type ResizeHandle } from "./resize";
 import {
   clampSelection,
@@ -121,6 +122,8 @@ export class GridView {
   private readonly layout: GridLayout;
   /** 머리글과 줄마다의 크기. 행·열 수나 줄 크기가 바뀌면 새로 만든다. */
   private geometry: GridGeometry;
+  /** 줄바꿈이 든 셀 때문에 저절로 높아지는 행. 셀 글자에서 계산하고 저장하지 않는다. (ADR 0031) */
+  private readonly autoRows: AutoRowLines;
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly scroller: HTMLDivElement;
@@ -163,7 +166,8 @@ export class GridView {
     this.engine = engine;
     this.history = history;
     this.layout = layout;
-    this.geometry = gridGeometry(layout, sheet, sheet.lineSizes("row"), sheet.lineSizes("col"));
+    this.autoRows = new AutoRowLines(sheet);
+    this.geometry = this.buildGeometry();
 
     this.root = document.createElement("div");
     // clip은 스크롤 영역을 만들지 않아서 브라우저가 입력창을 보이게 하려고 root를 스크롤하지 않는다.
@@ -362,10 +366,21 @@ export class GridView {
     this.apply(changes);
   }
 
+  /** 행 높이는 직접 바꾼 높이, 없으면 줄바꿈에 맞춘 자동 높이다. 직접 바꾼 행은 저절로 바뀌지 않는다. (Excel과 같음) */
+  private buildGeometry(): GridGeometry {
+    const { sheet, layout, autoRows } = this;
+    function* rowSizes(): Generator<[number, number]> {
+      yield* sheet.lineSizes("row");
+      for (const [row, lines] of autoRows.entries()) {
+        if (sheet.lineSize("row", row) === null) yield [row, autoRowHeight(lines, layout.rowHeight)];
+      }
+    }
+    return gridGeometry(layout, sheet, rowSizes(), sheet.lineSizes("col"));
+  }
+
   /** 행·열 수나 줄 크기가 바뀌면 위치 계산을 새로 하고 스크롤 크기를 맞춘다. */
   private updateGeometry(): void {
-    const { sheet } = this;
-    this.geometry = gridGeometry(this.layout, sheet, sheet.lineSizes("row"), sheet.lineSizes("col"));
+    this.geometry = this.buildGeometry();
     const size = contentSize(this.geometry);
     this.spacer.style.cssText = `width:${size.width}px;height:${size.height}px`;
   }
@@ -402,6 +417,7 @@ export class GridView {
    * 이 화면이 한 변경이면 선택을 시트 안으로만 줄이고, undo/redo면 들어가거나 빠진 줄을 고른다.
    */
   private readonly onStructureChange = (change: StructureChange): void => {
+    this.autoRows.rebuild();
     this.updateGeometry();
     this.clearCopied();
     let selection = clampSelection(this.currentSelection, this.sheet);
@@ -572,6 +588,8 @@ export class GridView {
 
   /** undo/redo 등 이 화면 밖에서 값이 바뀌면 바뀐 셀들을 선택한다. (Excel과 같음) */
   private readonly onSheetChange = (addresses: readonly CellAddress[]): void => {
+    // 줄바꿈이 든 셀이 바뀌면 그 행 높이가 저절로 늘고 준다.
+    if (this.autoRows.update(addresses)) this.updateGeometry();
     this.requestRender();
     if (this.applying || addresses.length === 0) return;
     this.clearCopied();
@@ -620,6 +638,10 @@ export class GridView {
       case "edit":
         event.preventDefault();
         this.startEditing("edit", this.sheet.get(this.currentSelection.active));
+        return;
+      case "newline":
+        event.preventDefault();
+        this.editor.insertLineBreak();
         return;
       case "toggleMode":
         event.preventDefault();

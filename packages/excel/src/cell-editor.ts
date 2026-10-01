@@ -1,7 +1,7 @@
 import type { CellAddress } from "./address";
 import type { EditMode } from "./edit-keys";
 import { cellRect, type GridGeometry, type GridLayout, type Viewport } from "./layout";
-import { CELL_FONT, CELL_PADDING, THEME } from "./render";
+import { CELL_FONT, CELL_PADDING, LINE_HEIGHT, THEME } from "./render";
 
 /** 입력창 테두리 두께 (px). 선택 테두리와 같다. */
 const BORDER = 2;
@@ -23,9 +23,14 @@ export class CellEditor {
   private currentMode: EditMode | null = null;
   private currentAddress: CellAddress | null = null;
   private isComposing = false;
-  /** 입력창이 늘어날 수 있는 최소·최대 너비 (px) */
+  /** 입력창이 늘어날 수 있는 최소·최대 너비와 높이 (px) */
   private minWidth = 0;
   private maxWidth = 0;
+  private minHeight = 0;
+  private maxHeight = 0;
+  /** 입력창 왼쪽 위 (틀 기준 px). 문제 알림을 그 아래에 놓는다. */
+  private problemX = 0;
+  private problemY = 0;
 
   constructor(parent: HTMLElement, layout: GridLayout) {
     this.layout = layout;
@@ -44,8 +49,9 @@ export class CellEditor {
     this.element.style.cssText = [
       "position:absolute;left:0;top:0;margin:0;resize:none;overflow:hidden;outline:none;box-sizing:border-box",
       `border:${BORDER}px solid ${THEME.selectionBorder};background:${THEME.background};color:${THEME.text}`,
-      `font:${CELL_FONT};line-height:${layout.rowHeight - BORDER}px;white-space:pre`,
-      `padding:0 ${CELL_PADDING - BORDER / 2}px`,
+      // 줄 높이는 셀 글자와 같고, 한 줄이면 기본 행 높이 가운데에 온다.
+      `font:${CELL_FONT};line-height:${LINE_HEIGHT}px;white-space:pre`,
+      `padding:${Math.max((layout.rowHeight - BORDER - LINE_HEIGHT) / 2, 0)}px ${CELL_PADDING - BORDER / 2}px`,
     ].join(";");
     this.hide();
 
@@ -113,6 +119,15 @@ export class CellEditor {
     this.fit();
   }
 
+  /** 커서 자리에 셀 안 줄바꿈을 넣는다. (Alt+Enter) 입력창의 되돌리기(Ctrl+Z)에도 남도록 브라우저 입력으로 넣는다. */
+  insertLineBreak(): void {
+    if (!document.execCommand("insertText", false, "\n")) {
+      const { selectionStart, selectionEnd } = this.element;
+      this.element.setRangeText("\n", selectionStart, selectionEnd, "end");
+      this.element.dispatchEvent(new Event("input"));
+    }
+  }
+
   /** 입력창 아래에 문제를 알리고 커서를 문제 위치에 둔다. 글자를 고치거나 입력을 끝내면 사라진다. */
   showProblem(message: string, position: number): void {
     this.problem.textContent = message;
@@ -165,22 +180,31 @@ export class CellEditor {
     const x = rect.x - layout.headerWidth - BORDER / 2;
     const y = rect.y - layout.headerHeight - BORDER / 2;
     this.element.style.transform = `translate(${x}px, ${y}px)`;
-    this.problem.style.transform = `translate(${x}px, ${y + rect.height + BORDER + 2}px)`;
-    this.element.style.height = `${rect.height + BORDER}px`;
     this.minWidth = rect.width + BORDER;
     this.maxWidth = Math.max(areaWidth - x, this.minWidth);
+    this.minHeight = rect.height + BORDER;
+    this.maxHeight = Math.max(areaHeight - y, this.minHeight);
+    this.problemY = y;
+    this.problemX = x;
     this.fit();
   }
 
-  /** 글자가 칸을 넘치면 화면 오른쪽 끝까지 입력창을 늘린다. (Excel과 같음) */
+  /** 글자가 칸을 넘치면 화면 오른쪽·아래 끝까지 입력창을 늘린다. (Excel과 같음) 문제 알림은 입력창 바로 아래에 둔다. */
   private fit(): void {
-    this.element.style.width = `${this.minWidth}px`;
-    if (!this.currentMode) return;
-    const overflow = this.element.scrollWidth - this.element.clientWidth;
-    if (overflow > 0) {
-      // 커서가 끝에서 잘리지 않게 한 칸 더 준다.
-      this.element.style.width = `${Math.min(this.minWidth + overflow + CELL_PADDING, this.maxWidth)}px`;
+    const { element } = this;
+    element.style.width = `${this.minWidth}px`;
+    element.style.height = `${this.minHeight}px`;
+    if (this.currentMode) {
+      const overflowX = element.scrollWidth - element.clientWidth;
+      if (overflowX > 0) {
+        // 커서가 끝에서 잘리지 않게 한 칸 더 준다.
+        element.style.width = `${Math.min(this.minWidth + overflowX + CELL_PADDING, this.maxWidth)}px`;
+      }
+      const overflowY = element.scrollHeight - element.clientHeight;
+      if (overflowY > 0) element.style.height = `${Math.min(this.minHeight + overflowY, this.maxHeight)}px`;
     }
+    const height = parseFloat(element.style.height);
+    this.problem.style.transform = `translate(${this.problemX}px, ${this.problemY + height + 2}px)`;
   }
 
   private hide(): void {

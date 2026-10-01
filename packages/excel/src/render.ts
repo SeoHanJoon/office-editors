@@ -2,6 +2,7 @@ import { columnName, type CellRange } from "./address";
 import type { FormulaEngine } from "./formula-engine";
 import { FormulaError, formatValue, type CellValue } from "./formula-value";
 import { cellRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
+import { textLines } from "./resize";
 import { selectionRange, type Selection } from "./selection";
 import type { Axis, Sheet } from "./sheet";
 
@@ -24,6 +25,17 @@ export const CELL_FONT = '13px -apple-system, "Segoe UI", "Malgun Gothic", sans-
 
 /** 셀 안쪽 글자 여백 (px) */
 export const CELL_PADDING = 4;
+
+/** 셀 글자 한 줄의 높이 (px). 셀 입력창도 같은 줄 높이를 쓴다. */
+export const LINE_HEIGHT = 16;
+
+/** 셀 글자 위아래 여백 (px). 한 줄이면 2 + 16 + 2 = 기본 행 높이 20px */
+export const CELL_VERTICAL_PADDING = 2;
+
+/** lines줄 글자가 다 들어가는 행 높이. 기본 높이보다 작아지지 않는다. */
+export function autoRowHeight(lines: number, defaultHeight: number): number {
+  return Math.max(defaultHeight, lines * LINE_HEIGHT + CELL_VERTICAL_PADDING * 2);
+}
 
 /** Excel과 비슷한 색 */
 export const THEME = {
@@ -131,7 +143,11 @@ function drawGridLines(ctx: CanvasRenderingContext2D, { xs, ys }: VisibleLines):
   ctx.stroke();
 }
 
-function drawCellText(ctx: CanvasRenderingContext2D, { engine }: RenderState, { range, xs, ys }: VisibleLines): void {
+/**
+ * 셀 글자는 셀 아래쪽에 붙여 그린다. (Excel 기본 세로 정렬) 여러 줄이면 마지막 줄이 아래쪽에 온다.
+ * 입력한 글자의 줄바꿈만 줄을 나누고, 수식 결과의 줄바꿈은 한 줄로 그린다. (ADR 0031)
+ */
+function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine }: RenderState, { range, xs, ys }: VisibleLines): void {
   ctx.font = THEME.font;
   ctx.fillStyle = THEME.text;
   ctx.textBaseline = "middle";
@@ -150,13 +166,21 @@ function drawCellText(ctx: CanvasRenderingContext2D, { engine }: RenderState, { 
       if (text === "") continue;
       const align = valueAlign(value);
       const textX = align === "left" ? x + CELL_PADDING : align === "right" ? x + width - CELL_PADDING : x + width / 2;
+      // 마지막 줄의 가운데. 한 줄도 안 들어가는 낮은 행은 가운데에 둔다.
+      const lastY = Math.max(y + height - CELL_VERTICAL_PADDING - LINE_HEIGHT / 2, y + height / 2);
+      // 줄바꿈이 없는 셀(거의 전부)은 입력한 글자를 읽지 않는다.
+      const lines = text.indexOf("\n") < 0 && text.indexOf("\r") < 0 ? null : textLines(sheet.get({ row, col }), text);
       // 글자가 칸을 넘치면 잘라낸다. (옆 칸으로 넘쳐 보이게 하는 건 나중에)
       ctx.save();
       ctx.beginPath();
       ctx.rect(x, y, width, height);
       ctx.clip();
       ctx.textAlign = align;
-      ctx.fillText(text, textX, y + height / 2);
+      if (lines) {
+        for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i]!, textX, lastY - (lines.length - 1 - i) * LINE_HEIGHT);
+      } else {
+        ctx.fillText(text, textX, lastY);
+      }
       ctx.restore();
     }
   }

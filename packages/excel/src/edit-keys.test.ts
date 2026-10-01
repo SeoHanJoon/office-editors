@@ -127,9 +127,15 @@ describe("입력 중일 때", () => {
     expect(action("F2", "edit")).toBe("toggleMode");
   });
 
-  test("Alt+Enter와 Ctrl+Enter는 아직 없어서 줄바꿈만 막는다", () => {
-    expect(action("Alt+Enter", "enter")).toBe("block");
+  test("입력 중 Alt+Enter(Mac은 Option+Enter)는 셀 안 줄바꿈이다", () => {
+    expect(action("Alt+Enter", "enter")).toBe("newline");
+    expect(action("Alt+Enter", "edit")).toBe("newline");
+    expect(action("Alt+Shift+Enter", "edit")).toBe("newline");
+  });
+
+  test("Ctrl+Enter는 아직 없어서 줄바꿈만 막는다", () => {
     expect(action("Control+Enter", "edit")).toBe("block");
+    expect(action("Control+Alt+Enter", "enter")).toBe("block");
   });
 
   test("Ctrl+Z, 글자, Delete, Backspace는 입력창에 맡긴다", () => {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { parseA1 } from "./address";
-import { uniformGeometry, type GridLayout, type Viewport } from "./layout";
+import { gridGeometry, uniformGeometry, type GridLayout, type Viewport } from "./layout";
 import { FormulaEngine } from "./formula-engine";
-import { drawGrid } from "./render";
+import { autoRowHeight, drawGrid } from "./render";
 import { selectCell } from "./selection";
 import { Sheet } from "./sheet";
 
@@ -96,4 +96,52 @@ describe("셀 글자 그리기", () => {
     const headers = texts.filter((t) => t.align === "center").map((t) => t.text);
     expect(headers).toEqual(["C", "D", "E", "F", "G", "11", "12", "13", "14", "15"]);
   });
+});
+
+describe("셀 안 줄바꿈 그리기", () => {
+  // 기본 크기(행 20px)에 가까운 배치: 머리글 20, 행 20, 열 64
+  const tall: GridLayout = { rowHeight: 20, colWidth: 64, headerHeight: 20, headerWidth: 46 };
+  const view: Viewport = { scrollLeft: 0, scrollTop: 0, width: 600, height: 400 };
+
+  function draw(sheet: Sheet, rowSizes: [number, number][] = []) {
+    const { ctx, texts } = recordingContext();
+    const geometry = gridGeometry(tall, sheet, rowSizes, []);
+    drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("Z1")!), geometry, viewport: view });
+    return texts.filter((t) => t.x > tall.headerWidth && t.y > tall.headerHeight);
+  }
+
+  test("한 줄 글자는 기본 높이 행의 가운데에 온다", () => {
+    const [text] = draw(new Sheet({ rowCount: 5, colCount: 3, data: [["가"]] }));
+
+    expect(text).toMatchObject({ text: "가", y: 20 + 10 });
+  });
+
+  test("입력한 줄바꿈으로 나눠 그리고, 마지막 줄을 셀 아래쪽에 붙인다", () => {
+    // 1행 높이 52 = 3줄(48) + 위아래 여백(4)
+    const texts = draw(new Sheet({ rowCount: 5, colCount: 3, data: [["가\n나다\n라"]] }), [[0, autoRowHeight(3, 20)]]);
+
+    expect(texts.map((t) => [t.text, t.y])).toEqual([
+      ["가", 20 + 52 - 2 - 8 - 32],
+      ["나다", 20 + 52 - 2 - 8 - 16],
+      ["라", 20 + 52 - 2 - 8],
+    ]);
+  });
+
+  test("높은 행의 한 줄 글자도 아래쪽에 붙인다 (Excel 기본 세로 정렬)", () => {
+    const [text] = draw(new Sheet({ rowCount: 5, colCount: 3, data: [["가"]] }), [[0, 60]]);
+
+    expect(text!.y).toBe(20 + 60 - 2 - 8);
+  });
+
+  test("수식 결과의 줄바꿈은 나누지 않고 한 줄로 그린다", () => {
+    const texts = draw(new Sheet({ rowCount: 5, colCount: 3, data: [["가\n나", "=A1"]] }), [[0, 36]]);
+
+    expect(texts.map((t) => t.text)).toEqual(["가", "나", "가\n나"]);
+  });
+});
+
+test("자동 행 높이는 줄 수 × 16 + 위아래 여백이고, 기본 높이보다 작지 않다", () => {
+  expect(autoRowHeight(1, 20)).toBe(20);
+  expect(autoRowHeight(3, 20)).toBe(52);
+  expect(autoRowHeight(1, 30)).toBe(30);
 });
