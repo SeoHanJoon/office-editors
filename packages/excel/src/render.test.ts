@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseA1 } from "./address";
-import type { GridLayout, Viewport } from "./layout";
+import { uniformGeometry, type GridLayout, type Viewport } from "./layout";
 import { FormulaEngine } from "./formula-engine";
 import { drawGrid } from "./render";
 import { selectCell } from "./selection";
@@ -40,7 +40,7 @@ const viewport = (scrollLeft = 0, scrollTop = 0): Viewport => ({ scrollLeft, scr
 
 function cellTexts(sheet: Sheet, view: Viewport) {
   const { ctx, texts } = recordingContext();
-  drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), layout, viewport: view });
+  drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), geometry: uniformGeometry(layout, sheet), viewport: view });
   // 머리글 글자는 빼고 셀 영역 글자만 본다.
   return texts.filter((t) => t.x > layout.headerWidth && t.y > layout.headerHeight);
 }
@@ -91,7 +91,7 @@ describe("셀 글자 그리기", () => {
     const { ctx, texts } = recordingContext();
     const sheet = new Sheet({ rowCount: 100, colCount: 10 });
 
-    drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), layout, viewport: viewport(40, 100) });
+    drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection: selectCell(parseA1("A1")!), geometry: uniformGeometry(layout, sheet), viewport: viewport(40, 100) });
 
     const headers = texts.filter((t) => t.align === "center").map((t) => t.text);
     expect(headers).toEqual(["C", "D", "E", "F", "G", "11", "12", "13", "14", "15"]);

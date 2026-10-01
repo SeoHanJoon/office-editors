@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import { FormulaEngine } from "./formula-engine";
-import { DEFAULT_LAYOUT } from "./layout";
+import { DEFAULT_LAYOUT, uniformGeometry } from "./layout";
 import { PERF_ROWS, scoreSheet } from "./perf-sheets";
 import { drawGrid } from "./render";
 import { selectCell } from "./selection";
@@ -41,6 +41,7 @@ test("10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) =
   const engine = new FormulaEngine(sheet);
   const ctx = fakeContext();
   const layout = DEFAULT_LAYOUT;
+  const geometry = uniformGeometry(layout, sheet);
   const selection = selectCell({ row: 0, col: 0 });
   // 한 번 그릴 때마다 한 화면 조금 넘게 내려가며 시트 전체를 돈다. (같은 칸만 그리지 않게)
   const step = 37 * layout.rowHeight;
@@ -48,6 +49,6 @@ test("10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) =
   let scrollTop = 0;
   await bench("drawGrid 한 번", () => {
     scrollTop = (scrollTop + step) % maxTop;
-    drawGrid(ctx, { sheet, engine, selection, layout, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
   }).run();
 });

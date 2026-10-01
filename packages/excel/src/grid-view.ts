@@ -20,12 +20,14 @@ import {
   DEFAULT_LAYOUT,
   cellRect,
   contentSize,
+  uniformGeometry,
   isInHeader,
   pageRows,
   pointToCell,
   pointToHeader,
   scrollToReveal,
   visibleRange,
+  type GridGeometry,
   type GridLayout,
   type Viewport,
 } from "./layout";
@@ -99,6 +101,8 @@ export class GridView {
   private readonly engine: FormulaEngine;
   private readonly history: History;
   private readonly layout: GridLayout;
+  /** 머리글과 줄마다의 크기. 행·열 수나 줄 크기가 바뀌면 새로 만든다. */
+  private geometry: GridGeometry;
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly scroller: HTMLDivElement;
@@ -136,6 +140,7 @@ export class GridView {
     this.engine = engine;
     this.history = history;
     this.layout = layout;
+    this.geometry = uniformGeometry(layout, sheet);
 
     this.root = document.createElement("div");
     // clip은 스크롤 영역을 만들지 않아서 브라우저가 입력창을 보이게 하려고 root를 스크롤하지 않는다.
@@ -151,7 +156,7 @@ export class GridView {
     this.scroller.setAttribute("aria-label", label);
 
     this.spacer = document.createElement("div");
-    this.resizeSpacer();
+    this.updateGeometry();
 
     this.scroller.append(this.spacer);
     this.root.append(this.canvas, this.scroller);
@@ -199,7 +204,7 @@ export class GridView {
 
   /** 지금 화면에 조금이라도 보이는 셀 범위 */
   get visibleRange(): CellRange {
-    return visibleRange(this.layout, this.viewport(), this.sheet);
+    return visibleRange(this.geometry, this.viewport());
   }
 
   /** 셀에 값을 입력하는 중이면 그 상태, 아니면 null */
@@ -261,7 +266,7 @@ export class GridView {
   }
 
   private reveal(address: CellAddress): void {
-    const next = scrollToReveal(this.layout, this.viewport(), address);
+    const next = scrollToReveal(this.geometry, this.viewport(), address);
     this.scroller.scrollLeft = next.scrollLeft;
     this.scroller.scrollTop = next.scrollTop;
   }
@@ -327,8 +332,10 @@ export class GridView {
     this.apply(changes);
   }
 
-  private resizeSpacer(): void {
-    const size = contentSize(this.layout, this.sheet);
+  /** 행·열 수나 줄 크기가 바뀌면 위치 계산을 새로 하고 스크롤 크기를 맞춘다. */
+  private updateGeometry(): void {
+    this.geometry = uniformGeometry(this.layout, this.sheet);
+    const size = contentSize(this.geometry);
     this.spacer.style.cssText = `width:${size.width}px;height:${size.height}px`;
   }
 
@@ -364,7 +371,7 @@ export class GridView {
    * 이 화면이 한 변경이면 선택을 시트 안으로만 줄이고, undo/redo면 들어가거나 빠진 줄을 고른다.
    */
   private readonly onStructureChange = (change: StructureChange): void => {
-    this.resizeSpacer();
+    this.updateGeometry();
     this.clearCopied();
     let selection = clampSelection(this.currentSelection, this.sheet);
     if (!this.applying) {
@@ -534,12 +541,17 @@ export class GridView {
   private navigate(event: KeyboardEvent): void {
     const result = navigate(this.currentSelection, event, {
       sheet: this.sheet,
-      pageRows: pageRows(this.layout, this.viewport()),
+      pageRows: pageRows(this.geometry, this.viewport()),
     });
     if (!result) return;
     event.preventDefault();
-    // PageUp/PageDown은 활성 셀과 함께 화면도 한 페이지 넘긴다.
-    this.scroller.scrollTop += result.scrollRows * this.layout.rowHeight;
+    // PageUp/PageDown은 활성 셀과 함께 화면도 한 페이지 넘긴다. 맨 위에 걸친 행부터 그 행 수만큼의 높이다.
+    if (result.scrollRows !== 0) {
+      const { rows } = this.geometry;
+      const top = rows.lineAt(this.scroller.scrollTop);
+      const target = Math.min(Math.max(top + result.scrollRows, 0), rows.count);
+      this.scroller.scrollTop += rows.offset(target) - rows.offset(top);
+    }
     const extendsRange = event.shiftKey && event.key !== "Tab" && event.key !== "Enter";
     this.select(result.selection, extendsRange ? "focus" : "active");
   }
@@ -572,7 +584,7 @@ export class GridView {
     this.focus();
     if (!committed) return;
 
-    const header = pointToHeader(this.layout, this.viewport(), this.sheet, point.x, point.y);
+    const header = pointToHeader(this.geometry, this.viewport(), point.x, point.y);
     if (header) {
       // 행 번호·열 이름을 누르면 줄 전체를 고른다. Shift를 누르면 고른 줄(anchor)부터 누른 줄까지다.
       const { anchor } = this.currentSelection;
@@ -580,12 +592,12 @@ export class GridView {
       this.dragKind = header.axis;
       this.selectLines(from, header.index);
     } else {
-      if (isInHeader(this.layout, point.x, point.y)) {
+      if (isInHeader(this.geometry, point.x, point.y)) {
         // 왼쪽 위 모서리를 누르면 시트 전체를 고른다.
         this.select(selectAll(this.currentSelection, this.sheet), "none");
         return;
       }
-      const cell = pointToCell(this.layout, this.viewport(), this.sheet, point.x, point.y);
+      const cell = pointToCell(this.geometry, this.viewport(), point.x, point.y);
       this.dragKind = "cell";
       if (event.shiftKey) this.select(extendTo(this.currentSelection, cell), "focus");
       else this.select(selectCell(cell), "active");
@@ -597,7 +609,7 @@ export class GridView {
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (event.pointerId !== this.dragPointer) return;
     const point = this.localPoint(event);
-    const cell = pointToCell(this.layout, this.viewport(), this.sheet, point.x, point.y);
+    const cell = pointToCell(this.geometry, this.viewport(), point.x, point.y);
     const { anchor } = this.currentSelection;
     if (this.dragKind === "cell") this.select(extendTo(this.currentSelection, cell), "focus");
     else if (this.dragKind === "row") this.selectLines(anchor.row, cell.row);
@@ -606,7 +618,7 @@ export class GridView {
 
   /** dragKind 축으로 from줄부터 to줄까지 전체를 고른다. to줄이 보이게 그 축으로만 스크롤한다. (가로로 스크롤한 채 행 번호를 눌러도 A열로 가지 않게) */
   private selectLines(from: number, to: number): void {
-    const next = scrollToReveal(this.layout, this.viewport(), { row: to, col: to });
+    const next = scrollToReveal(this.geometry, this.viewport(), { row: to, col: to });
     if (this.dragKind === "row") {
       this.scroller.scrollTop = next.scrollTop;
       this.select(selectRows(from, to, this.sheet), "none");
@@ -625,7 +637,7 @@ export class GridView {
   /** 셀을 더블클릭하면 기존 값을 고치는 "edit" 입력을 시작한다. */
   private readonly onDoubleClick = (event: MouseEvent): void => {
     const point = this.localPoint(event);
-    if (isInHeader(this.layout, point.x, point.y)) return;
+    if (isInHeader(this.geometry, point.x, point.y)) return;
     this.startEditing("edit", this.sheet.get(this.currentSelection.active));
   };
 
@@ -638,9 +650,9 @@ export class GridView {
     // 스크롤바는 브라우저에 맡긴다.
     if (point.x >= this.scroller.clientWidth || point.y >= this.scroller.clientHeight) return;
     const viewport = this.viewport();
-    const header = pointToHeader(this.layout, viewport, this.sheet, point.x, point.y);
-    const corner = !header && isInHeader(this.layout, point.x, point.y);
-    const cell = pointToCell(this.layout, viewport, this.sheet, point.x, point.y);
+    const header = pointToHeader(this.geometry, viewport, point.x, point.y);
+    const corner = !header && isInHeader(this.geometry, point.x, point.y);
+    const cell = pointToCell(this.geometry, viewport, point.x, point.y);
     const editing = this.editor.address;
     if (editing && !header && !corner && sameAddress(cell, editing)) return;
     event.preventDefault();
@@ -684,7 +696,7 @@ export class GridView {
     const { scrollLeft, scrollTop } = this.scroller;
     this.reveal(active);
     const open = () => {
-      const rect = cellRect(this.layout, this.viewport(), active);
+      const rect = cellRect(this.geometry, this.viewport(), active);
       const box = this.scroller.getBoundingClientRect();
       this.openMenu(target, box.left + rect.x, box.top + rect.y + rect.height, true);
     };
@@ -773,7 +785,7 @@ export class GridView {
 
   /** 입력 중이면 그 셀 위에, 아니면 활성 셀 위에 입력창을 놓는다. */
   private placeEditor(viewport = this.viewport()): void {
-    this.editor.place(viewport, this.editor.address ?? this.currentSelection.active);
+    this.editor.place(this.geometry, viewport, this.editor.address ?? this.currentSelection.active);
   }
 
   private readonly requestRender = (): void => {
@@ -804,7 +816,7 @@ export class GridView {
       engine: this.engine,
       selection: this.currentSelection,
       copied: this.copied?.range ?? null,
-      layout: this.layout,
+      geometry: this.geometry,
       viewport,
     });
   }

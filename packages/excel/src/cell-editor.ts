@@ -1,6 +1,6 @@
 import type { CellAddress } from "./address";
 import type { EditMode } from "./edit-keys";
-import { cellRect, type GridLayout, type Viewport } from "./layout";
+import { cellRect, type GridGeometry, type GridLayout, type Viewport } from "./layout";
 import { CELL_FONT, CELL_PADDING, THEME } from "./render";
 
 /** 입력창 테두리 두께 (px). 선택 테두리와 같다. */
@@ -152,8 +152,8 @@ export class CellEditor {
     if (hadFocus) this.focus();
   }
 
-  /** 입력창을 address 셀 위에 놓는다. 화면 크기나 스크롤이 바뀔 때마다 부른다. */
-  place(viewport: Viewport, address: CellAddress): void {
+  /** 입력창을 address 셀 위에 놓는다. 화면 크기나 스크롤, 줄 크기가 바뀔 때마다 부른다. */
+  place(geometry: GridGeometry, viewport: Viewport, address: CellAddress): void {
     const { layout } = this;
     const areaWidth = Math.max(viewport.width - layout.headerWidth, 0);
     const areaHeight = Math.max(viewport.height - layout.headerHeight, 0);
@@ -161,7 +161,7 @@ export class CellEditor {
     this.frame.style.height = `${areaHeight}px`;
 
     // 테두리가 선택 테두리(셀 경계선 양쪽 1px)와 겹치도록 1px 바깥에 놓는다.
-    const rect = cellRect(layout, viewport, address);
+    const rect = cellRect(geometry, viewport, address);
     const x = rect.x - layout.headerWidth - BORDER / 2;
     const y = rect.y - layout.headerHeight - BORDER / 2;
     this.element.style.transform = `translate(${x}px, ${y}px)`;
