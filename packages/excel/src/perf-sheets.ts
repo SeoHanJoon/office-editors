@@ -27,6 +27,11 @@ export function bigSumSheet(n = PERF_ROWS): Sheet {
  * J1 "총점 합계", K1 `=SUM(G2:G{n})`.
  */
 export function scoreSheet(n = PERF_ROWS): Sheet {
+  return new Sheet({ rowCount: PERF_ROWS, colCount: PERF_COLS, data: scoreData(n) });
+}
+
+/** scoreSheet의 처음 값. data[행][열] */
+function scoreData(n: number): string[][] {
   const data: string[][] = [["번호", "이름", "부서", "국어", "영어", "수학", "총점", "평균", "", "총점 합계", `=SUM(G2:G${n})`]];
   for (let row = 2; row <= n; row++) {
     const i = row - 1;
@@ -41,7 +46,7 @@ export function scoreSheet(n = PERF_ROWS): Sheet {
       `=AVERAGE(D${row}:F${row})`,
     ]);
   }
-  return new Sheet({ rowCount: PERF_ROWS, colCount: PERF_COLS, data });
+  return data;
 }
 
 /** 10만 × 50칸을 모두 숫자로 채운 시트 (500만 칸) */
@@ -60,8 +65,8 @@ export function fullSheet(): Sheet {
  * 줄 크기 색인(ADR 0032)에서 기본 크기와 다른 줄이 가장 많은 경우다. (1줄인 행을 빼면 약 7만 5천 행)
  */
 export function multilineSheet(n = PERF_ROWS): Sheet {
-  const sheet = scoreSheet(n);
+  const data = scoreData(n);
   const memos = ["확인", "확인\n재시험", "확인\n재시험\n상담", "확인\n재시험\n상담\n보충"];
-  sheet.setCells(Array.from({ length: n - 1 }, (_, i) => ({ address: { row: i + 1, col: 8 }, value: memos[i % 4]! })));
-  return sheet;
+  for (let row = 1; row < n; row++) data[row]![8] = memos[(row - 1) % 4]!;
+  return new Sheet({ rowCount: PERF_ROWS, colCount: PERF_COLS, data });
 }
