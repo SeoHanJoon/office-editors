@@ -78,7 +78,7 @@ ADR은 아래 형식으로 짧게 씁니다.
 | **7** ✅ | Excel | 오른쪽 클릭 메뉴 (행·열 머리글, 셀) + 전체 선택·줄 선택 단축키 | 아래 "Step 7 범위"의 동작을 메뉴로 할 수 있고, 각 동작이 undo 한 번에 되돌아감 | [0029](adr/0029-context-menu.md), [0030](adr/0030-select-all-and-line-shortcuts.md) |
 | **8** ✅ | Excel | 열 너비·행 높이 조절 + 셀 안 줄바꿈과 행 높이 자동 맞춤 | 아래 "Step 8 범위"가 동작하고, Step 5 성능 목표를 계속 지킴 | [0031](adr/0031-row-column-sizes.md), [0032](adr/0032-line-size-index.md) |
 | **9** ✅ | Excel | 채우기 핸들 (선택 모서리를 끌어 값 이어 채우기) | 아래 "Step 9 범위"가 동작하고, undo 한 번에 되돌아감 | [0033](adr/0033-fill-handle.md) |
-| **10** | Excel | 상단 툴바 + 수식 입력줄 + 셀 서식 | 아래 "Step 10 범위"가 동작하고, 서식이 복사·붙여넣기·undo를 따라감 | 예정 |
+| **10** | Excel | 상단 툴바 + 수식 입력줄 + 셀 서식 | 아래 "Step 10 범위"가 동작하고, 서식이 복사·붙여넣기·undo를 따라감 | [0034](adr/0034-cell-format-storage.md), [0035](adr/0035-toolbar-and-formula-bar.md), [0036](adr/0036-wrap-text-row-height.md) |
 | **11** | Docs | Tiptap으로 기본 문서 편집 + 공통 undo 연결 | 글쓰기·서식·undo 동작 | 예정 |
 | **12** | PPT | 슬라이드 추가/삭제, 텍스트·도형 배치 + 공통 undo 연결 | 슬라이드 3장 편집 가능 | 예정 |
 | **13** | 확장 (선택) | 실시간 협업(Yjs) 또는 AI 편집 | 해당 Step 시작 시 정의 | 예정 |
