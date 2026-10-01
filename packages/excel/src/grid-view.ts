@@ -20,7 +20,7 @@ import {
   DEFAULT_LAYOUT,
   cellRect,
   contentSize,
-  uniformGeometry,
+  gridGeometry,
   isInHeader,
   pageRows,
   pointToCell,
@@ -117,6 +117,7 @@ export class GridView {
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribeSheet: () => void;
   private readonly unsubscribeStructure: () => void;
+  private readonly unsubscribeSizes: () => void;
   private readonly unsubscribeEngine: () => void;
   private readonly listeners = new Set<SelectionListener>();
   private currentSelection: Selection = selectCell({ row: 0, col: 0 });
@@ -140,7 +141,7 @@ export class GridView {
     this.engine = engine;
     this.history = history;
     this.layout = layout;
-    this.geometry = uniformGeometry(layout, sheet);
+    this.geometry = gridGeometry(layout, sheet, sheet.lineSizes("row"), sheet.lineSizes("col"));
 
     this.root = document.createElement("div");
     // clip은 스크롤 영역을 만들지 않아서 브라우저가 입력창을 보이게 하려고 root를 스크롤하지 않는다.
@@ -191,6 +192,7 @@ export class GridView {
     input.addEventListener("contextmenu", this.onKeyboardContextMenu);
     this.unsubscribeSheet = sheet.onChange(this.onSheetChange);
     this.unsubscribeStructure = sheet.onStructureChange(this.onStructureChange);
+    this.unsubscribeSizes = sheet.onLineSizeChange(this.onLineSizeChange);
     // 나눠서 계산하는 엔진(ADR 0024)은 시트가 그대로여도 계산값이 채워지므로 엔진 변경도 듣는다.
     this.unsubscribeEngine = engine.onChange(this.requestRender);
     this.resizeObserver = new ResizeObserver(this.requestRender);
@@ -235,6 +237,7 @@ export class GridView {
     this.resizeObserver.disconnect();
     this.unsubscribeSheet();
     this.unsubscribeStructure();
+    this.unsubscribeSizes();
     this.unsubscribeEngine();
     this.listeners.clear();
     this.root.remove();
@@ -334,7 +337,8 @@ export class GridView {
 
   /** 행·열 수나 줄 크기가 바뀌면 위치 계산을 새로 하고 스크롤 크기를 맞춘다. */
   private updateGeometry(): void {
-    this.geometry = uniformGeometry(this.layout, this.sheet);
+    const { sheet } = this;
+    this.geometry = gridGeometry(this.layout, sheet, sheet.lineSizes("row"), sheet.lineSizes("col"));
     const size = contentSize(this.geometry);
     this.spacer.style.cssText = `width:${size.width}px;height:${size.height}px`;
   }
@@ -381,6 +385,13 @@ export class GridView {
       selection = change.axis === "row" ? selectRows(first, last, this.sheet) : selectColumns(first, last, this.sheet);
     }
     this.select(selection, "active");
+    this.requestRender();
+  };
+
+  /** 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다. */
+  private readonly onLineSizeChange = (): void => {
+    this.updateGeometry();
+    this.placeEditor();
     this.requestRender();
   };
 

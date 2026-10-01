@@ -30,11 +30,21 @@ export interface GridGeometry {
 
 /** 모든 줄이 기본 크기인 geometry */
 export function uniformGeometry(layout: GridLayout, bounds: SheetBounds): GridGeometry {
+  return gridGeometry(layout, bounds, [], []);
+}
+
+/** 기본 크기와 다른 줄의 [줄 번호, 크기] 목록으로 geometry를 만든다. */
+export function gridGeometry(
+  layout: GridLayout,
+  bounds: SheetBounds,
+  rowSizes: Iterable<readonly [number, number]>,
+  colSizes: Iterable<readonly [number, number]>,
+): GridGeometry {
   return {
     headerHeight: layout.headerHeight,
     headerWidth: layout.headerWidth,
-    rows: new LineSizes(bounds.rowCount, layout.rowHeight),
-    cols: new LineSizes(bounds.colCount, layout.colWidth),
+    rows: new LineSizes(bounds.rowCount, layout.rowHeight, rowSizes),
+    cols: new LineSizes(bounds.colCount, layout.colWidth, colSizes),
   };
 }
 

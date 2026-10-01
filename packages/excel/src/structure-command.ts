@@ -8,7 +8,7 @@ const lineAfter = mapLine;
 /**
  * 행·열 삽입이나 삭제 한 번. 셀을 옮기고 수식 참조를 고치는 일은 Sheet.changeStructure가 한다.
  *
- * undo는 반대 변경(삽입 ↔ 삭제)을 하고, 지운 셀과 참조를 고치기 전 수식 글자를 되살린다.
+ * undo는 반대 변경(삽입 ↔ 삭제)을 하고, 지운 셀·줄 크기와 참조를 고치기 전 수식 글자를 되살린다.
  * 반대 변경만으로는 원래대로 돌아오지 않는 수식이 있어서다. (`#REF!`가 된 참조, 범위 첫 행을 지워 줄어든 범위)
  * 반대 변경으로 이미 원래 글자가 된 수식은 Sheet가 걸러서 알리지 않는다.
  */
@@ -37,6 +37,6 @@ export class StructureCommand implements Command {
       const line = lineAfter(inverse, byRow ? address.row : address.col)!;
       restore.push({ address: byRow ? { row: line, col: address.col } : { row: address.row, col: line }, value });
     }
-    this.sheet.changeStructure(inverse, restore);
+    this.sheet.changeStructure(inverse, restore, this.result.removedSizes);
   }
 }
