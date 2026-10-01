@@ -1068,3 +1068,55 @@ test.describe("셀 안 줄바꿈", () => {
     expect(await rowHeight(page, 3)).toBe(linesHeight(3));
   });
 });
+
+test.describe("채우기", () => {
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const cells = (page: Page, list: string[]) => Promise.all(list.map((a1) => cell(page, a1)));
+
+  async function typeIn(page: Page, a1: string, text: string) {
+    await clickCell(page, a1);
+    await page.keyboard.type(text);
+    await page.keyboard.press("Enter");
+  }
+
+  test("Ctrl+D는 첫 행을 아래 칸에 복사하고(수식은 참조가 따라감), undo 한 번에 되돌린다", async ({ page }) => {
+    await typeIn(page, "L2", "항목1");
+    await typeIn(page, "M2", "=D2*2");
+    await clickCell(page, "L2");
+    await clickCell(page, "M4", { shift: true });
+
+    await page.keyboard.press("ControlOrMeta+d");
+
+    expect(await cells(page, ["L3", "L4", "M3", "M4"])).toEqual(["항목1", "항목1", "=D3*2", "=D4*2"]);
+    expect((await state(page)).selection).toBe("L2:M4");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L3", "L4", "M3", "M4"])).toEqual(["", "", "", ""]);
+  });
+
+  test("Ctrl+R은 한 열만 골랐으면 왼쪽 열을 복사해 온다", async ({ page }) => {
+    await typeIn(page, "L2", "왼쪽");
+    await clickCell(page, "M2");
+
+    await page.keyboard.press("ControlOrMeta+r");
+
+    expect(await cell(page, "M2")).toBe("왼쪽");
+    // 브라우저 새로고침을 막았으므로 표가 그대로다.
+    expect((await state(page)).active).toBe("M2");
+  });
+
+  test("범위를 고른 채 입력하고 Ctrl+Enter를 누르면 범위 전체에 넣고 선택은 그대로다", async ({ page }) => {
+    await clickCell(page, "L2");
+    await clickCell(page, "M3", { shift: true });
+    await page.keyboard.type("=D2+1");
+
+    await page.keyboard.press("ControlOrMeta+Enter");
+
+    expect(await cells(page, ["L2", "M2", "L3", "M3"])).toEqual(["=D2+1", "=E2+1", "=D3+1", "=E3+1"]);
+    const { selection, active, editing } = await state(page);
+    expect({ selection, active, editing }).toEqual({ selection: "L2:M3", active: "L2", editing: null });
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L2", "M2", "L3", "M3"])).toEqual(["", "", "", ""]);
+  });
+});

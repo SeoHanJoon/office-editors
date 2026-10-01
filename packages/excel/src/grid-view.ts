@@ -13,6 +13,7 @@ import {
   pasteTextChanges,
 } from "./clipboard";
 import { editAction, type EditMode } from "./edit-keys";
+import { copyFillChanges, fillEntryChanges } from "./fill";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
 import { formatValue } from "./formula-value";
@@ -336,9 +337,10 @@ export class GridView {
 
   /**
    * 입력을 확정한다. 값이 그대로면 기록하지 않는다.
+   * fill이면 고른 범위 전체에 넣는다. 수식은 칸마다 상대 참조를 옮긴다. (Ctrl+Enter)
    * 문법이 틀린 수식이면 Excel처럼 확정하지 않고 입력을 이어가게 한 뒤 false를 돌려준다.
    */
-  private commit(): boolean {
+  private commit(fill = false): boolean {
     if (this.editor.mode) {
       this.editor.finishComposition();
       const problem = findFormulaProblem(this.editor.text);
@@ -348,9 +350,12 @@ export class GridView {
       }
     }
     const edit = this.editor.stop();
-    if (edit && edit.text !== this.sheet.get(edit.address)) {
-      this.apply([{ address: edit.address, value: edit.text }]);
-    }
+    if (!edit) return true;
+    const changes = fill
+      ? fillEntryChanges(edit.text, edit.address, selectionRange(this.currentSelection))
+      : [{ address: edit.address, value: edit.text }];
+    const changed = changes.filter(({ address, value }) => value !== this.sheet.get(address));
+    if (changed.length > 0) this.apply(changed);
     return true;
   }
 
@@ -618,6 +623,16 @@ export class GridView {
       case "commit":
         event.preventDefault();
         if (this.commit()) this.navigate(event);
+        return;
+      case "fillEntry":
+        event.preventDefault();
+        this.commit(true);
+        this.requestRender();
+        return;
+      case "fillDown":
+      case "fillRight":
+        event.preventDefault(); // 브라우저 북마크·새로고침
+        this.apply(copyFillChanges(this.sheet, selectionRange(this.currentSelection), action === "fillDown" ? "down" : "right"));
         return;
       case "undo":
         event.preventDefault();
