@@ -2,17 +2,21 @@
 
 import { History } from "@office/command-core";
 import {
+  DEFAULT_FORMAT,
   FormulaEngine,
   GridView,
-  formatValue,
+  formatCellValue,
   parseA1,
   rangeToA1,
   selectionRange,
   toA1,
   type CellAddress,
+  type CellFormat,
   type EditMode,
 } from "@office/excel";
 import { useEffect, useRef, useState } from "react";
+import { ExcelToolbar } from "./excel-toolbar";
+import { FormulaBar } from "./formula-bar";
 import { createSampleSheet } from "./sample-data";
 
 /** 브라우저 테스트가 Canvas 대신 읽는 표 상태. 개발 서버에서만 window.__excel로 노출한다. */
@@ -38,8 +42,10 @@ export interface ExcelTestHandle {
   };
   /** 셀("B3")에 입력된 글자. 수식이면 "=A1+1"처럼 수식 그대로. 빈 셀이면 "" */
   cell(a1: string): string;
-  /** 셀("B3")에 보이는 계산값 글자. 빈 셀이면 "" */
+  /** 셀("B3")에 보이는 글자 (계산값에 숫자 형식을 적용한 것). 빈 셀이면 "" */
   value(a1: string): string;
+  /** 셀("B3")에 보이는 서식. 기본 서식이면 {} */
+  format(a1: string): CellFormat;
   /** 화면에 그리는 행 높이 (px). 행 번호는 화면과 같이 1부터 */
   rowHeight(row: number): number;
   /** 화면에 그리는 열 너비 (px). 열 이름("B")으로 */
@@ -58,16 +64,56 @@ function address(a1: string): CellAddress {
   return result;
 }
 
+/** 툴바·수식 입력줄이 보여 줄 표 상태 */
+interface BarState {
+  /** 활성 셀 주소 ("B3") */
+  active: string;
+  /** 수식 입력줄 글자: 입력 중이면 입력 중인 글자, 아니면 활성 셀에 입력된 글자 */
+  text: string;
+  editing: boolean;
+  format: CellFormat;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+const INITIAL_BAR: BarState = { active: "A1", text: "", editing: false, format: DEFAULT_FORMAT, canUndo: false, canRedo: false };
+
 export function Spreadsheet() {
   const gridRef = useRef<HTMLDivElement>(null);
-  const [active, setActive] = useState("A1");
+  const historyRef = useRef<History | null>(null);
+  const [view, setView] = useState<GridView | null>(null);
+  const [bar, setBar] = useState<BarState>(INITIAL_BAR);
 
   useEffect(() => {
     const sheet = createSampleSheet();
     // 10만 행의 수식을 한 번에 계산하면 화면이 1초 넘게 멈추므로, 표를 먼저 그리고 수식은 나눠서 계산한다.
     const engine = new FormulaEngine(sheet, { background: true });
-    const view = new GridView(gridRef.current!, sheet, new History(), { engine });
-    const unsubscribe = view.onSelectionChange((selection) => setActive(toA1(selection.active)));
+    const history = new History();
+    const view = new GridView(gridRef.current!, sheet, history, { engine });
+    historyRef.current = history;
+    // 선택, 입력, 값, 서식, undo 기록 중 무엇이 바뀌든 툴바와 수식 입력줄을 다시 읽는다.
+    const refresh = () => {
+      const { active } = view.selection;
+      const edit = view.editState;
+      setBar({
+        active: toA1(active),
+        text: edit ? edit.text : sheet.get(active),
+        editing: edit !== null,
+        format: view.activeFormat,
+        canUndo: history.canUndo,
+        canRedo: history.canRedo,
+      });
+    };
+    const unsubscribes = [
+      view.onSelectionChange(refresh),
+      view.onEditChange(refresh),
+      sheet.onChange(refresh),
+      sheet.onFormatChange(refresh),
+      sheet.onStructureChange(refresh),
+      history.onChange(refresh),
+    ];
+    refresh();
+    setView(view);
     view.focus();
     if (process.env.NODE_ENV !== "production") {
       window.__excel = {
@@ -83,29 +129,42 @@ export function Spreadsheet() {
           colCount: sheet.colCount,
         }),
         cell: (a1) => sheet.get(address(a1)),
-        value: (a1) => formatValue(engine.getValue(address(a1))),
+        value: (a1) => formatCellValue(engine.getValue(address(a1)), sheet.format(address(a1))),
+        format: (a1) => sheet.format(address(a1)),
         rowHeight: (row) => view.displayedSize("row", row - 1),
         colWidth: (column) => view.displayedSize("col", address(`${column}1`).col),
       };
     }
     return () => {
-      unsubscribe();
+      for (const unsubscribe of unsubscribes) unsubscribe();
       view.destroy();
       engine.destroy();
+      setView(null);
+      historyRef.current = null;
       delete window.__excel;
     };
   }, []);
 
+  const undoOrRedo = (redo: boolean) => {
+    const history = historyRef.current;
+    if (!history || !view) return;
+    if (redo) history.redo();
+    else history.undo();
+    view.focus();
+  };
+
   return (
-    <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", fontFamily: "sans-serif" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderBottom: "1px solid #d0d0d0" }}>
-        <input
-          aria-label="이름 상자"
-          readOnly
-          value={active}
-          style={{ width: 96, padding: "2px 6px", border: "1px solid #c8c8c8", fontSize: 13 }}
-        />
-      </div>
+    <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", fontFamily: "sans-serif", fontSize: 13 }}>
+      <ExcelToolbar
+        view={view}
+        format={bar.format}
+        canUndo={bar.canUndo}
+        canRedo={bar.canRedo}
+        editing={bar.editing}
+        onUndo={() => undoOrRedo(false)}
+        onRedo={() => undoOrRedo(true)}
+      />
+      <FormulaBar view={view} active={bar.active} text={bar.text} />
       <div ref={gridRef} style={{ flex: 1, minHeight: 0 }} />
     </div>
   );

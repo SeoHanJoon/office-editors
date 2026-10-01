@@ -519,3 +519,61 @@ describe("batch", () => {
     }
   });
 });
+
+describe("변경 알림", () => {
+  test("편집·undo·redo마다 한 번씩 알리고, 알릴 때 canUndo·canRedo가 이미 바뀌어 있다", () => {
+    const history = new History();
+    const sheet: Sheet = new Map();
+    const seen: [boolean, boolean][] = [];
+    history.onChange(() => seen.push([history.canUndo, history.canRedo]));
+
+    history.execute(setCell(sheet, "A1", "1"));
+    history.undo();
+    history.redo();
+
+    expect(seen).toEqual([
+      [true, false],
+      [false, true],
+      [true, false],
+    ]);
+  });
+
+  test("batch 안의 편집은 batch가 끝날 때 한 번만 알린다", () => {
+    const history = new History();
+    const sheet: Sheet = new Map();
+    const listener = vi.fn();
+    history.onChange(listener);
+
+    history.batch(() => {
+      history.execute(setCell(sheet, "A1", "1"));
+      history.execute(setCell(sheet, "A2", "2"));
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test("되돌릴 것이 없는 undo, 실패한 편집, 빈 batch는 알리지 않는다", () => {
+    const history = new History();
+    const listener = vi.fn();
+    history.onChange(listener);
+
+    history.undo();
+    history.redo();
+    expect(() => history.execute(failing())).toThrow();
+    history.batch(() => {});
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  test("돌려받은 함수를 부르면 더 알리지 않는다", () => {
+    const history = new History();
+    const listener = vi.fn();
+    const unsubscribe = history.onChange(listener);
+    unsubscribe();
+
+    history.execute(setCell(new Map(), "A1", "1"));
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

@@ -48,6 +48,10 @@ export type EditAction =
   | "fillRight"
   /** 입력을 확정하며 고른 범위 전체에 넣는다. 선택은 그대로 둔다. (Ctrl+Enter) */
   | "fillEntry"
+  /** 고른 범위의 굵게·기울임·밑줄을 켜고 끈다. (Ctrl+B, Ctrl+I, Ctrl+U) 입력 중에는 없다. */
+  | "bold"
+  | "italic"
+  | "underline"
   | "block";
 
 /**
@@ -64,6 +68,10 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
       if (isLetter(input, "z")) return input.shiftKey ? "redo" : "undo";
       if (isLetter(input, "y") && !input.shiftKey) return "redo";
       if (isLetter(input, "a") && !input.shiftKey) return "selectAll";
+      // Ctrl+U는 브라우저의 소스 보기 단축키와 겹친다. 부르는 쪽이 기본 동작을 막는다.
+      if (isLetter(input, "b") && !input.shiftKey) return "bold";
+      if (isLetter(input, "i") && !input.shiftKey) return "italic";
+      if (isLetter(input, "u") && !input.shiftKey) return "underline";
       // 브라우저의 북마크(Ctrl/Cmd+D)·새로고침(Ctrl/Cmd+R) 단축키와 겹친다. 부르는 쪽이 기본 동작을 막는다.
       if (isLetter(input, "d") && !input.shiftKey) return "fillDown";
       if (isLetter(input, "r") && !input.shiftKey) return "fillRight";

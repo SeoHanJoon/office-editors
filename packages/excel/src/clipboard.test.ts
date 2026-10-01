@@ -115,6 +115,19 @@ describe("복사한 셀", () => {
     expect(copyText(sheet, engine, range("A1:C2"))).toBe("1\t2\t\r\n5\t#DIV/0!\t\r\n");
   });
 
+  test("숫자는 숫자 형식대로 보이는 글자가 들어간다 (Excel과 같음)", () => {
+    const sheet = createSheet({ A1: "1234.5", B1: "0.25", C1: "글자" });
+    sheet.setFormats({
+      cells: [
+        { address: { row: 0, col: 0 }, format: { numberFormat: { kind: "number", decimals: 2 } } },
+        { address: { row: 0, col: 1 }, format: { numberFormat: { kind: "percent", decimals: 0 } } },
+        { address: { row: 0, col: 2 }, format: { numberFormat: { kind: "currency", decimals: 0 } } },
+      ],
+    });
+    const engine = new FormulaEngine(sheet);
+    expect(copyText(sheet, engine, range("A1:C1"))).toBe("1,234.50\t25%\t글자\r\n");
+  });
+
   test("수식은 옮긴 만큼 상대 참조가 따라가고 $는 그대로다", () => {
     const sheet = createSheet({ A1: "1", B1: "=A1*$A$1", A2: "'5" });
     expect(asRecord(pasteCopyChanges(sheet, range("A1:B2"), range("C3:D4")))).toEqual({

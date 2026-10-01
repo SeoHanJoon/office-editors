@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { parseA1 } from "./address";
 import { gridGeometry, uniformGeometry, type GridLayout, type Viewport } from "./layout";
 import { FormulaEngine } from "./formula-engine";
-import { THEME, autoRowHeight, drawGrid } from "./render";
+import type { CellFormat } from "./cell-format";
+import { FONT_FAMILY, THEME, autoRowHeight, drawGrid } from "./render";
 import { selectCell, selectRange } from "./selection";
 import { Sheet } from "./sheet";
 
@@ -201,4 +202,109 @@ test("자동 행 높이는 줄 수 × 16 + 위아래 여백이고, 기본 높이
   expect(autoRowHeight(1, 20)).toBe(20);
   expect(autoRowHeight(3, 20)).toBe(52);
   expect(autoRowHeight(1, 30)).toBe(30);
+});
+
+describe("서식 그리기", () => {
+  // 머리글 20×46, 행 20, 열 64
+  const tall: GridLayout = { rowHeight: 20, colWidth: 64, headerHeight: 20, headerWidth: 46 };
+  const view: Viewport = { scrollLeft: 0, scrollTop: 0, width: 600, height: 400 };
+
+  interface Call {
+    name: string;
+    args: unknown[];
+    fillStyle: unknown;
+    strokeStyle: unknown;
+    font: unknown;
+    textAlign: unknown;
+  }
+
+  /** 모든 그리기 호출과 그때의 스타일을 남기는 가짜 Canvas. measureText는 글자당 10px */
+  function draw(sheet: Sheet, rowSizes: [number, number][] = []): Call[] {
+    const calls: Call[] = [];
+    const state: Record<string | symbol, unknown> = {};
+    const ctx = new Proxy(state, {
+      get(target, prop) {
+        if (prop in target) return target[prop];
+        if (prop === "measureText") return (text: string) => ({ width: text.length * 10 });
+        return (...args: unknown[]) =>
+          calls.push({ name: String(prop), args, fillStyle: target.fillStyle, strokeStyle: target.strokeStyle, font: target.font, textAlign: target.textAlign });
+      },
+      set(target, prop, value) {
+        target[prop] = value;
+        return true;
+      },
+    });
+    const geometry = gridGeometry(tall, sheet, rowSizes, []);
+    drawGrid(ctx as unknown as CanvasRenderingContext2D, {
+      sheet,
+      engine: new FormulaEngine(sheet),
+      selection: selectCell(parseA1("Z1")!),
+      geometry,
+      viewport: view,
+    });
+    return calls;
+  }
+
+  /** 셀 영역에 그린 글자 */
+  const cellText = (calls: Call[]) =>
+    calls.filter((c) => c.name === "fillText" && (c.args[1] as number) > tall.headerWidth && (c.args[2] as number) > tall.headerHeight);
+
+  function sheetWith(data: string[][], format: CellFormat, a1 = "A1"): Sheet {
+    const sheet = new Sheet({ rowCount: 5, colCount: 3, data });
+    sheet.setFormats({ cells: [{ address: parseA1(a1)!, format }] });
+    return sheet;
+  }
+
+  test("채우기 색은 칸 크기 그대로 칠한다", () => {
+    const calls = draw(sheetWith([[]], { fill: "#ffff00" }, "B2"));
+
+    expect(calls).toContainEqual(expect.objectContaining({ name: "fillRect", fillStyle: "#ffff00", args: [46 + 64, 20 + 20, 64, 20] }));
+  });
+
+  test("테두리는 칸 경계에 검정 선으로 긋는다", () => {
+    const calls = draw(sheetWith([[]], { borderBottom: true }, "A1"));
+
+    // 아래 변: y = 20 + 20 → 39.5 (경계 바로 앞 픽셀 가운데)
+    expect(calls).toContainEqual(expect.objectContaining({ name: "moveTo", args: [45, 39.5] }));
+    expect(calls).toContainEqual(expect.objectContaining({ name: "lineTo", args: [110, 39.5] }));
+    expect(calls).toContainEqual(expect.objectContaining({ name: "stroke", strokeStyle: THEME.border }));
+  });
+
+  test("굵게·기울임·글자 크기·글자색으로 글자를 그린다", () => {
+    const [text] = cellText(draw(sheetWith([["가"]], { bold: true, italic: true, fontSize: 15, color: "#ff0000" })));
+
+    expect(text).toMatchObject({ font: `italic bold 20px ${FONT_FAMILY}`, fillStyle: "#ff0000" });
+  });
+
+  test("가로 정렬은 값 종류보다 서식이 먼저다", () => {
+    const [text] = cellText(draw(sheetWith([["12"]], { align: "center" })));
+
+    expect(text).toMatchObject({ textAlign: "center", args: ["12", 46 + 32, expect.any(Number)] });
+  });
+
+  test("세로 정렬: 위는 칸 위쪽에, 가운데는 칸 가운데에", () => {
+    const top = cellText(draw(sheetWith([["가"]], { verticalAlign: "top" }), [[0, 60]]))[0]!;
+    const middle = cellText(draw(sheetWith([["가"]], { verticalAlign: "middle" }), [[0, 60]]))[0]!;
+
+    expect(top.args[2]).toBe(20 + 2 + 8);
+    expect(middle.args[2]).toBe(20 + 30);
+  });
+
+  test("숫자는 숫자 형식대로 그린다", () => {
+    const [text] = cellText(draw(sheetWith([["1234.5"]], { numberFormat: { kind: "number", decimals: 2 } })));
+
+    expect(text!.args[0]).toBe("1,234.50");
+  });
+
+  test("자동 줄바꿈 셀은 열 너비(글자 영역 56px)에 맞춰 나눠 그린다", () => {
+    const texts = cellText(draw(sheetWith([["ab cd ef"]], { wrap: true }), [[0, 36]]));
+
+    expect(texts.map((t) => t.args[0])).toEqual(["ab cd", "ef"]);
+  });
+
+  test("밑줄은 글자 너비만큼 글자 아래에 칠한다", () => {
+    const calls = draw(sheetWith([["abc"]], { underline: true }));
+
+    expect(calls).toContainEqual(expect.objectContaining({ name: "rect", args: [46 + 4, expect.any(Number), 30, 1] }));
+  });
 });

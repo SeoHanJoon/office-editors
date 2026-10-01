@@ -1,7 +1,8 @@
 import type { CellAddress } from "./address";
+import { DEFAULT_FONT_SIZE, DEFAULT_FORMAT, fontFor, lineHeightFor, type CellFormat } from "./cell-format";
 import type { EditMode } from "./edit-keys";
 import { cellRect, type GridGeometry, type GridLayout, type Viewport } from "./layout";
-import { CELL_FONT, CELL_PADDING, LINE_HEIGHT, THEME } from "./render";
+import { CELL_FONT, CELL_PADDING, FONT_FAMILY, LINE_HEIGHT, THEME } from "./render";
 
 /** 입력창 테두리 두께 (px). 선택 테두리와 같다. */
 const BORDER = 2;
@@ -104,18 +105,30 @@ export class CellEditor {
   }
 
   /**
-   * address 셀 입력을 시작하고 입력창을 보이게 한다.
+   * address 셀 입력을 시작하고 입력창을 보이게 한다. 입력창 글자는 셀 서식(글꼴, 글자 크기, 글자색)을 따른다.
    * text를 주면 그 글자로 바꾸고 커서를 끝에 둔다. 안 주면 이미 친 글자(조합 중인 글자 포함)를 그대로 둔다.
    */
-  start(address: CellAddress, mode: EditMode, text?: string): void {
+  start(address: CellAddress, mode: EditMode, text?: string, format: CellFormat = DEFAULT_FORMAT): void {
     this.currentAddress = address;
     this.currentMode = mode;
+    this.setFormat(format);
     if (text !== undefined && !this.isComposing) {
       this.element.value = text;
       this.element.setSelectionRange(text.length, text.length);
     }
     this.element.style.opacity = "1";
     this.element.style.pointerEvents = "auto";
+    this.fit();
+  }
+
+  /**
+   * 바깥(수식 입력줄)에서 친 글자로 바꾼다. 입력창에 포커스가 없을 때만 부른다. (조합 중인 글자를 건드리지 않게)
+   * 커서는 옮기지 않는다.
+   */
+  setText(text: string): void {
+    if (this.element.value === text) return;
+    this.element.value = text;
+    this.problem.hidden = true;
     this.fit();
   }
 
@@ -150,6 +163,7 @@ export class CellEditor {
     this.currentMode = null;
     this.element.value = "";
     this.problem.hidden = true;
+    this.setFormat(DEFAULT_FORMAT);
     this.hide();
     this.fit();
     return address ? { address, text } : null;
@@ -205,6 +219,17 @@ export class CellEditor {
     }
     const height = parseFloat(element.style.height);
     this.problem.style.transform = `translate(${this.problemX}px, ${this.problemY + height + 2}px)`;
+  }
+
+  /** 입력창 글자를 셀 서식에 맞춘다. 정렬과 채우기 색은 따르지 않는다. (입력 중에는 흰 바탕에 왼쪽부터) */
+  private setFormat(format: CellFormat): void {
+    const { style } = this.element;
+    const font = format === DEFAULT_FORMAT ? CELL_FONT : fontFor(format, FONT_FAMILY);
+    const lineHeight = format.fontSize === undefined ? LINE_HEIGHT : lineHeightFor(format.fontSize ?? DEFAULT_FONT_SIZE);
+    style.font = font;
+    style.lineHeight = `${lineHeight}px`;
+    style.color = format.color ?? THEME.text;
+    style.textDecoration = [format.underline ? "underline" : "", format.strike ? "line-through" : ""].join(" ").trim() || "none";
   }
 
   private hide(): void {

@@ -1,10 +1,22 @@
 import { columnName, type CellRange } from "./address";
 import type { FormulaEngine } from "./formula-engine";
+import {
+  DEFAULT_FONT_SIZE,
+  DEFAULT_FORMAT,
+  fontFor,
+  fontPx,
+  formatCellValue,
+  lineHeightFor,
+  type CellFormat,
+  type HorizontalAlign,
+  type VerticalAlign,
+} from "./cell-format";
 import { FormulaError, formatValue, type CellValue } from "./formula-value";
 import { cellRect, fillHandleRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
 import { textLines } from "./resize";
 import { selectionRange, type Selection } from "./selection";
 import type { Axis, Sheet } from "./sheet";
+import { wrapText } from "./text-wrap";
 
 export interface RenderState {
   readonly sheet: Sheet;
@@ -24,21 +36,28 @@ export interface RenderState {
   readonly viewport: Viewport;
 }
 
-/** 셀 글자 글꼴. 셀 입력창도 같은 글꼴을 쓴다. */
-export const CELL_FONT = '13px -apple-system, "Segoe UI", "Malgun Gothic", sans-serif';
+/** 큰 반복문에서 다른 파일의 이름을 매번 부르지 않도록 한 번 읽어 둔다. (ADR 0022) */
+const DEFAULT = DEFAULT_FORMAT;
+const showValue = formatValue;
+
+/** 셀 글자 글꼴 이름. 글꼴 종류는 바꿀 수 없다. */
+export const FONT_FAMILY = '-apple-system, "Segoe UI", "Malgun Gothic", sans-serif';
+
+/** 기본 서식 셀 글자 글꼴 (10pt). 셀 입력창과 알림도 같은 글꼴을 쓴다. */
+export const CELL_FONT = fontFor(DEFAULT_FORMAT, FONT_FAMILY);
 
 /** 셀 안쪽 글자 여백 (px) */
 export const CELL_PADDING = 4;
 
-/** 셀 글자 한 줄의 높이 (px). 셀 입력창도 같은 줄 높이를 쓴다. */
-export const LINE_HEIGHT = 16;
+/** 기본 크기 셀 글자 한 줄의 높이 (px). 셀 입력창도 같은 줄 높이를 쓴다. */
+export const LINE_HEIGHT = lineHeightFor(DEFAULT_FONT_SIZE);
 
 /** 셀 글자 위아래 여백 (px). 한 줄이면 2 + 16 + 2 = 기본 행 높이 20px */
 export const CELL_VERTICAL_PADDING = 2;
 
-/** lines줄 글자가 다 들어가는 행 높이. 기본 높이보다 작아지지 않는다. */
-export function autoRowHeight(lines: number, defaultHeight: number): number {
-  return Math.max(defaultHeight, lines * LINE_HEIGHT + CELL_VERTICAL_PADDING * 2);
+/** 한 줄 높이가 lineHeight인 글자 lines줄이 다 들어가는 행 높이. 기본 높이보다 작아지지 않는다. */
+export function autoRowHeight(lines: number, defaultHeight: number, lineHeight = LINE_HEIGHT): number {
+  return Math.max(defaultHeight, lines * lineHeight + CELL_VERTICAL_PADDING * 2);
 }
 
 /** Excel과 비슷한 색 */
@@ -63,6 +82,8 @@ export const THEME = {
   resizeGuide: "#444444",
   /** 채우기 핸들을 끄는 중에 보이는 채울 범위 테두리 */
   fillPreview: "#8a8a8a",
+  /** 셀 테두리 서식 */
+  border: "#000000",
 };
 
 /**
@@ -81,9 +102,12 @@ export function drawGrid(ctx: CanvasRenderingContext2D, state: RenderState): voi
   ctx.beginPath();
   ctx.rect(geometry.headerWidth, geometry.headerHeight, viewport.width, viewport.height);
   ctx.clip();
-  drawSelectionFill(ctx, state);
+  const formats = visibleFormats(state.sheet, lines.range);
   drawGridLines(ctx, lines);
-  drawCellText(ctx, state, lines);
+  if (formats) drawCellFills(ctx, formats, lines);
+  drawSelectionFill(ctx, state);
+  if (formats) drawBorders(ctx, formats, lines);
+  drawCellText(ctx, state, lines, formats);
   drawSelectionBorder(ctx, state);
   ctx.restore();
 
@@ -116,16 +140,87 @@ function visibleLines(geometry: GridGeometry, viewport: Viewport): VisibleLines 
   return { range, xs, ys };
 }
 
+/**
+ * 보이는 칸의 서식. [(행 - range.top) × 보이는 열 수 + (열 - range.left)]에 있다.
+ * 서식이 하나도 없는 시트면 null이다. (모든 칸이 기본 서식이라 따로 그릴 것이 없다)
+ */
+function visibleFormats(sheet: Sheet, range: CellRange): CellFormat[] | null {
+  if (!sheet.hasFormats) return null;
+  const formats: CellFormat[] = [];
+  for (let row = range.top; row <= range.bottom; row++) {
+    for (let col = range.left; col <= range.right; col++) formats.push(sheet.format({ row, col }));
+  }
+  return formats;
+}
+
+/** 채우기 색. 격자선을 덮는다. (Excel과 같음) */
+function drawCellFills(ctx: CanvasRenderingContext2D, formats: readonly CellFormat[], { range, xs, ys }: VisibleLines): void {
+  const width = range.right - range.left + 1;
+  for (let i = 0; i < formats.length; i++) {
+    const fill = formats[i]!.fill;
+    if (!fill) continue;
+    const r = Math.floor(i / width);
+    const c = i - r * width;
+    const x = Math.round(xs[c]!);
+    const y = Math.round(ys[r]!);
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, Math.round(xs[c + 1]!) - x, Math.round(ys[r + 1]!) - y);
+  }
+}
+
+/**
+ * 테두리: 가는 검정 실선. 두 칸이 맞닿은 선은 어느 쪽 칸에 있어도 그린다. (ADR 0034)
+ * 격자선과 같은 자리(경계 바로 앞 픽셀)에 긋는다.
+ */
+function drawBorders(ctx: CanvasRenderingContext2D, formats: readonly CellFormat[], { range, xs, ys }: VisibleLines): void {
+  const width = range.right - range.left + 1;
+  ctx.beginPath();
+  let any = false;
+  for (let i = 0; i < formats.length; i++) {
+    const format = formats[i]!;
+    if (!format.borderTop && !format.borderRight && !format.borderBottom && !format.borderLeft) continue;
+    any = true;
+    const r = Math.floor(i / width);
+    const c = i - r * width;
+    // 선이 맞닿은 칸 끝까지 닿도록 1px 더 긋는다.
+    const left = crisp(xs[c]!);
+    const right = crisp(xs[c + 1]!);
+    const top = crisp(ys[r]!);
+    const bottom = crisp(ys[r + 1]!);
+    if (format.borderTop) {
+      ctx.moveTo(left - 0.5, top);
+      ctx.lineTo(right + 0.5, top);
+    }
+    if (format.borderBottom) {
+      ctx.moveTo(left - 0.5, bottom);
+      ctx.lineTo(right + 0.5, bottom);
+    }
+    if (format.borderLeft) {
+      ctx.moveTo(left, top - 0.5);
+      ctx.lineTo(left, bottom + 0.5);
+    }
+    if (format.borderRight) {
+      ctx.moveTo(right, top - 0.5);
+      ctx.lineTo(right, bottom + 0.5);
+    }
+  }
+  if (!any) return;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.border;
+  ctx.stroke();
+}
+
+/** 범위는 옅게 덮고 활성 셀만 비워 둔다. (Excel과 같음) 채우기 색 위에 덮어서 색이 있는 칸도 골랐는지 보인다. */
 function drawSelectionFill(ctx: CanvasRenderingContext2D, { geometry, viewport, selection }: RenderState): void {
   const range = selectionRange(selection);
   if (range.top === range.bottom && range.left === range.right) return;
-  // 범위는 옅게 칠하고 활성 셀만 흰색으로 둔다. (Excel과 같음)
   const area = rangeRect(geometry, viewport, range);
-  ctx.fillStyle = THEME.selectionFill;
-  ctx.fillRect(area.x, area.y, area.width, area.height);
   const active = cellRect(geometry, viewport, selection.active);
-  ctx.fillStyle = THEME.background;
-  ctx.fillRect(active.x, active.y, active.width, active.height);
+  ctx.beginPath();
+  ctx.rect(area.x, area.y, area.width, area.height);
+  ctx.rect(active.x, active.y, active.width, active.height);
+  ctx.fillStyle = THEME.selectionFill;
+  ctx.fill("evenodd");
 }
 
 function drawGridLines(ctx: CanvasRenderingContext2D, { xs, ys }: VisibleLines): void {
@@ -150,13 +245,22 @@ function drawGridLines(ctx: CanvasRenderingContext2D, { xs, ys }: VisibleLines):
 }
 
 /**
- * 셀 글자는 셀 아래쪽에 붙여 그린다. (Excel 기본 세로 정렬) 여러 줄이면 마지막 줄이 아래쪽에 온다.
+ * 셀 글자. 서식이 없으면 셀 아래쪽에 붙여 그린다. (Excel 기본 세로 정렬) 여러 줄이면 마지막 줄이 아래쪽에 온다.
  * 입력한 글자의 줄바꿈만 줄을 나누고, 수식 결과의 줄바꿈은 한 줄로 그린다. (ADR 0031)
+ * 자동 줄바꿈 셀은 보이는 값을 열 너비에 맞춰 나눈다. 숫자는 나누지 않는다. (ADR 0036)
+ * formats가 null이면 모든 칸이 기본 서식이다.
  */
-function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine }: RenderState, { range, xs, ys }: VisibleLines): void {
+function drawCellText(
+  ctx: CanvasRenderingContext2D,
+  { sheet, engine }: RenderState,
+  { range, xs, ys }: VisibleLines,
+  formats: readonly CellFormat[] | null,
+): void {
   ctx.font = THEME.font;
   ctx.fillStyle = THEME.text;
   ctx.textBaseline = "middle";
+  let font = THEME.font;
+  const visibleCols = range.right - range.left + 1;
   for (let row = range.top; row <= range.bottom; row++) {
     const y = ys[row - range.top]!;
     const height = ys[row - range.top + 1]! - y;
@@ -168,28 +272,74 @@ function drawCellText(ctx: CanvasRenderingContext2D, { sheet, engine }: RenderSt
         continue;
       }
       const value = engine.getValue({ row, col });
-      const text = formatValue(value);
+      if (value === null) continue;
+      const format = formats ? formats[(row - range.top) * visibleCols + (col - range.left)]! : DEFAULT;
+      const text = format === DEFAULT ? showValue(value) : formatCellValue(value, format);
       if (text === "") continue;
-      const align = valueAlign(value);
+      const cellFont = format === DEFAULT ? THEME.font : fontFor(format, FONT_FAMILY);
+      if (cellFont !== font) {
+        ctx.font = cellFont;
+        font = cellFont;
+      }
+      const align = format.align ?? valueAlign(value);
       const textX = align === "left" ? x + CELL_PADDING : align === "right" ? x + width - CELL_PADDING : x + width / 2;
-      // 마지막 줄의 가운데. 한 줄도 안 들어가는 낮은 행은 가운데에 둔다.
-      const lastY = Math.max(y + height - CELL_VERTICAL_PADDING - LINE_HEIGHT / 2, y + height / 2);
-      // 줄바꿈이 없는 셀(거의 전부)은 입력한 글자를 읽지 않는다.
-      const lines = text.indexOf("\n") < 0 && text.indexOf("\r") < 0 ? null : textLines(sheet.get({ row, col }), text);
+      const lineHeight = format.fontSize === undefined ? LINE_HEIGHT : lineHeightFor(format.fontSize);
+      let lines: string[] | null;
+      if (format.wrap && typeof value !== "number") {
+        lines = wrapText(text, width - CELL_PADDING * 2, (part) => ctx.measureText(part).width);
+      } else {
+        // 줄바꿈이 없는 셀(거의 전부)은 입력한 글자를 읽지 않는다.
+        lines = text.indexOf("\n") < 0 && text.indexOf("\r") < 0 ? null : textLines(sheet.get({ row, col }), text);
+      }
+      const count = lines ? lines.length : 1;
+      const firstY = firstLineY(format.verticalAlign ?? "bottom", y, height, count, lineHeight);
       // 글자가 칸을 넘치면 잘라낸다. (옆 칸으로 넘쳐 보이게 하는 건 나중에)
       ctx.save();
       ctx.beginPath();
       ctx.rect(x, y, width, height);
       ctx.clip();
       ctx.textAlign = align;
-      if (lines) {
-        for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i]!, textX, lastY - (lines.length - 1 - i) * LINE_HEIGHT);
-      } else {
-        ctx.fillText(text, textX, lastY);
+      if (format.color) ctx.fillStyle = format.color;
+      for (let i = 0; i < count; i++) {
+        const line = lines ? lines[i]! : text;
+        const lineY = firstY + i * lineHeight;
+        ctx.fillText(line, textX, lineY);
+        if (format.underline || format.strike) decorate(ctx, format, line, textX, lineY, align);
       }
       ctx.restore();
     }
   }
+}
+
+/**
+ * 첫 줄 가운데의 y. 글자 덩어리(줄 수 × 줄 높이)를 위·가운데·아래에 맞춘다.
+ * 아래 맞춤은 덩어리가 칸보다 높으면 마지막 줄이 칸 가운데보다 위로 가지 않게 한다. (한 줄도 안 들어가는 낮은 행은 가운데)
+ */
+function firstLineY(align: VerticalAlign, y: number, height: number, lines: number, lineHeight: number): number {
+  const block = lines * lineHeight;
+  if (align === "top") return y + CELL_VERTICAL_PADDING + lineHeight / 2;
+  if (align === "middle") return y + (height - block) / 2 + lineHeight / 2;
+  const lastY = Math.max(y + height - CELL_VERTICAL_PADDING - lineHeight / 2, y + height / 2);
+  return lastY - (lines - 1) * lineHeight;
+}
+
+/** 밑줄과 취소선. 글자 너비만큼 글자색으로 긋는다. lineY는 줄 가운데다. */
+function decorate(
+  ctx: CanvasRenderingContext2D,
+  format: CellFormat,
+  line: string,
+  textX: number,
+  lineY: number,
+  align: HorizontalAlign,
+): void {
+  const width = ctx.measureText(line).width;
+  const start = align === "left" ? textX : align === "right" ? textX - width : textX - width / 2;
+  const size = fontPx(format.fontSize ?? DEFAULT_FONT_SIZE);
+  const thickness = Math.max(1, Math.round(size / 14));
+  ctx.beginPath();
+  if (format.underline) ctx.rect(start, Math.round(lineY + size * 0.42), width, thickness);
+  if (format.strike) ctx.rect(start, Math.round(lineY - thickness / 2), width, thickness);
+  ctx.fill();
 }
 
 /** 계산 중인 수식 칸: 가운데에 회색 "…" */

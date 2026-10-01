@@ -1214,3 +1214,305 @@ test.describe("채우기", () => {
     expect(await cells(page, ["L2", "M2", "L3", "M3"])).toEqual(["", "", "", ""]);
   });
 });
+
+test.describe("툴바와 셀 서식", () => {
+  test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+  const toolbar = (page: Page) => page.getByRole("toolbar", { name: "서식 도구" });
+  const button = (page: Page, name: string) => toolbar(page).getByRole("button", { name, exact: true });
+  const format = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.format(a1), a1);
+  const value = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.value(a1), a1);
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const rowHeight = (page: Page, row: number) => page.evaluate((row) => window.__excel!.rowHeight(row), row);
+
+  async function typeIn(page: Page, a1: string, text: string) {
+    await clickCell(page, a1);
+    await page.keyboard.type(text);
+    await page.keyboard.press("Enter");
+  }
+
+  async function selectRange(page: Page, from: string, to: string) {
+    await clickCell(page, from);
+    await clickCell(page, to, { shift: true });
+  }
+
+  test("굵게 버튼을 누르면 고른 범위가 굵어지고 버튼이 눌린 모양이 되며, undo 한 번에 되돌아간다", async ({ page }) => {
+    await selectRange(page, "L2", "M3");
+
+    await button(page, "굵게").click();
+
+    expect(await format(page, "L2")).toEqual({ bold: true });
+    expect(await format(page, "M3")).toEqual({ bold: true });
+    await expect(button(page, "굵게")).toHaveAttribute("aria-pressed", "true");
+
+    // 다른 셀로 가면 그 셀의 서식이 버튼에 보인다.
+    await clickCell(page, "N2");
+    await expect(button(page, "굵게")).toHaveAttribute("aria-pressed", "false");
+
+    await button(page, "실행 취소").click();
+    expect(await format(page, "L2")).toEqual({});
+    await expect(button(page, "다시 실행")).toBeEnabled();
+    await button(page, "다시 실행").click();
+    expect(await format(page, "M3")).toEqual({ bold: true });
+  });
+
+  test("Ctrl/Cmd+B·I·U로 켜고 끈다. 활성 셀이 켜져 있으면 고른 범위 모두 끈다", async ({ page }) => {
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+b");
+    await page.keyboard.press("ControlOrMeta+i");
+    await page.keyboard.press("ControlOrMeta+u");
+    expect(await format(page, "L2")).toEqual({ bold: true, italic: true, underline: true });
+
+    await clickCell(page, "M2", { shift: true });
+    await page.keyboard.press("ControlOrMeta+b");
+
+    expect(await format(page, "L2")).toEqual({ italic: true, underline: true });
+    expect(await format(page, "M2")).toEqual({});
+    expect((await state(page)).editing).toBeNull();
+  });
+
+  test("글자 크기·글자색·채우기 색을 고른 뒤 바로 표에 입력할 수 있다", async ({ page }) => {
+    await typeIn(page, "L2", "큰 글자");
+    await clickCell(page, "L2");
+
+    await page.getByLabel("글자 크기").selectOption("20");
+    await button(page, "글자색").click();
+    await page.getByRole("dialog", { name: "글자색" }).getByRole("button", { name: "#ff0000" }).click();
+    await button(page, "채우기 색").click();
+    await page.getByRole("dialog", { name: "채우기 색" }).getByRole("button", { name: "#ffff00" }).click();
+
+    expect(await format(page, "L2")).toEqual({ fontSize: 20, color: "#ff0000", fill: "#ffff00" });
+    // 큰 글자에 맞춰 행이 높아진다.
+    expect(await rowHeight(page, 2)).toBeGreaterThan(ROW_HEIGHT);
+
+    // 포커스가 표로 돌아와 있어 바로 입력된다.
+    await page.keyboard.type("다시");
+    expect((await state(page)).editing).toBe("enter");
+    await page.keyboard.press("Escape");
+
+    await button(page, "채우기 색").click();
+    await page.getByRole("dialog", { name: "채우기 색" }).getByRole("button", { name: "채우기 없음" }).click();
+    expect(await format(page, "L2")).toEqual({ fontSize: 20, color: "#ff0000" });
+  });
+
+  test("숫자 형식: 숫자·통화·백분율을 고르고 소수 자릿수를 늘리고 줄인다", async ({ page }) => {
+    await typeIn(page, "L2", "1234.5");
+    await clickCell(page, "L2");
+    const numberFormat = page.getByLabel("숫자 형식");
+
+    await numberFormat.selectOption("number");
+    expect(await value(page, "L2")).toBe("1,234.50");
+    await button(page, "자릿수 줄임").click();
+    expect(await value(page, "L2")).toBe("1,234.5");
+
+    await numberFormat.selectOption("currency");
+    expect(await value(page, "L2")).toBe("₩1,235");
+    await button(page, "자릿수 늘림").click();
+    expect(await value(page, "L2")).toBe("₩1,234.5");
+
+    await numberFormat.selectOption("percent");
+    expect(await value(page, "L2")).toBe("123450%");
+    await expect(numberFormat).toHaveValue("percent");
+
+    // 입력한 글자는 그대로다.
+    expect(await cell(page, "L2")).toBe("1234.5");
+  });
+
+  test("테두리 메뉴에서 바깥쪽 테두리를 고르면 범위 바깥 변만 생기고, 테두리 없음으로 지운다", async ({ page }) => {
+    await selectRange(page, "L2", "M3");
+
+    await button(page, "테두리").click();
+    await page.getByRole("menu", { name: "테두리" }).getByRole("menuitem", { name: "바깥쪽 테두리" }).click();
+
+    expect(await format(page, "L2")).toEqual({ borderTop: true, borderLeft: true });
+    expect(await format(page, "M3")).toEqual({ borderBottom: true, borderRight: true });
+
+    await button(page, "테두리").click();
+    await page.getByRole("menu", { name: "테두리" }).getByRole("menuitem", { name: "테두리 없음" }).click();
+    expect(await format(page, "L2")).toEqual({});
+  });
+
+  test("정렬 버튼과 자동 줄바꿈: 줄바꿈을 켜면 열 너비에 맞춰 행이 높아지고, 끄면 돌아온다", async ({ page }) => {
+    await typeIn(page, "L2", "가나다라 마바사아 자차카타 파하");
+    await clickCell(page, "L2");
+
+    await button(page, "가운데 맞춤").click();
+    await button(page, "위쪽 맞춤").click();
+    await expect(button(page, "가운데 맞춤")).toHaveAttribute("aria-pressed", "true");
+    await expect(button(page, "아래쪽 맞춤")).toHaveAttribute("aria-pressed", "false");
+
+    await button(page, "자동 줄바꿈").click();
+    expect(await format(page, "L2")).toEqual({ align: "center", verticalAlign: "top", wrap: true });
+    const wrapped = await rowHeight(page, 2);
+    expect(wrapped).toBeGreaterThan(ROW_HEIGHT * 2);
+
+    // 열을 넓히면 줄이 줄어 행도 낮아진다.
+    const box = (await grid(page).boundingBox())!;
+    const border = { x: box.x + HEADER_WIDTH + 12 * COL_WIDTH, y: box.y + HEADER_HEIGHT / 2 };
+    await page.mouse.move(border.x, border.y);
+    await page.mouse.down();
+    await page.mouse.move(border.x + 200, border.y, { steps: 5 });
+    await page.mouse.up();
+    expect(await rowHeight(page, 2)).toBeLessThan(wrapped);
+
+    await button(page, "자동 줄바꿈").click();
+    expect(await rowHeight(page, 2)).toBe(ROW_HEIGHT);
+  });
+
+  test("서식 지우기는 서식만 지우고 값은 둔다", async ({ page }) => {
+    await typeIn(page, "L2", "값");
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+b");
+    await button(page, "가운데 맞춤").click();
+
+    await button(page, "서식 지우기").click();
+
+    expect(await format(page, "L2")).toEqual({});
+    expect(await cell(page, "L2")).toBe("값");
+  });
+
+  test("10만 행 열 전체에 서식을 주면 마지막 행까지 바로 적용된다", async ({ page }) => {
+    await clickHeader(page, "D");
+
+    await button(page, "굵게").click();
+
+    expect(await format(page, "D100000")).toEqual({ bold: true });
+    expect(await format(page, "E100000")).toEqual({});
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await format(page, "D100000")).toEqual({});
+  });
+
+  test("앱 안에서 복사해 붙이면 서식이 따라가고, undo 한 번에 값과 서식이 함께 돌아간다", async ({ page }) => {
+    await typeIn(page, "L2", "굵은 값");
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+b");
+
+    await page.keyboard.press("ControlOrMeta+c");
+    await clickCell(page, "N4");
+    await page.keyboard.press("ControlOrMeta+v");
+
+    expect(await cell(page, "N4")).toBe("굵은 값");
+    expect(await format(page, "N4")).toEqual({ bold: true });
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cell(page, "N4")).toBe("");
+    expect(await format(page, "N4")).toEqual({});
+  });
+
+  test("채우기 핸들로 채우면 서식도 되풀이된다", async ({ page }) => {
+    await typeIn(page, "L2", "1");
+    await typeIn(page, "L3", "2");
+    await clickCell(page, "L2");
+    await page.keyboard.press("ControlOrMeta+b");
+    await selectRange(page, "L2", "L3");
+
+    const corner = await cellCenter(page, "L3");
+    const target = await cellCenter(page, "L5");
+    await page.mouse.move(corner.x + COL_WIDTH / 2, corner.y + ROW_HEIGHT / 2);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 8 });
+    await page.mouse.up();
+
+    expect(await Promise.all(["L4", "L5"].map((a1) => cell(page, a1)))).toEqual(["3", "4"]);
+    expect(await Promise.all(["L4", "L5"].map((a1) => format(page, a1)))).toEqual([{ bold: true }, {}]);
+  });
+
+  test("행을 넣으면 바로 위 행의 서식을 물려받는다", async ({ page }) => {
+    await clickHeader(page, 3);
+    await button(page, "굵게").click();
+    await clickHeader(page, 4);
+
+    await page.keyboard.press("ControlOrMeta+Shift+Equal");
+
+    expect(await format(page, "L4")).toEqual({ bold: true });
+    // 원래 4행은 5행으로 밀리고, 서식이 없던 행이라 그대로 기본이다.
+    expect(await format(page, "L5")).toEqual({});
+  });
+});
+
+test.describe("수식 입력줄과 이름 상자", () => {
+  const formulaBar = (page: Page) => page.getByLabel("수식 입력줄");
+  const editor = (page: Page) => page.getByLabel("셀 입력");
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+
+  test("셀을 고르면 입력한 글자(수식이면 수식)가 수식 입력줄에 보인다", async ({ page }) => {
+    await clickCell(page, "G2");
+    await expect(formulaBar(page)).toHaveValue("=SUM(D2:F2)");
+
+    await clickCell(page, "B2");
+    await expect(formulaBar(page)).toHaveValue(await cell(page, "B2"));
+  });
+
+  test("수식 입력줄에서 치면 셀 입력창에도 같은 글자가 보이고, Enter로 확정하면 아래로 간다", async ({ page }) => {
+    await clickCell(page, "L2");
+
+    await formulaBar(page).click();
+    await page.keyboard.type("=1+2");
+
+    await expect(editor(page)).toHaveValue("=1+2");
+    expect((await state(page)).editing).toBe("edit");
+
+    await page.keyboard.press("Enter");
+
+    expect(await cell(page, "L2")).toBe("=1+2");
+    expect((await state(page)).active).toBe("L3");
+    expect((await state(page)).editing).toBeNull();
+    // 포커스가 표로 돌아와 바로 입력할 수 있다.
+    await page.keyboard.type("x");
+    await expect(editor(page)).toHaveValue("x");
+  });
+
+  test("셀에서 치면 수식 입력줄도 따라 바뀐다. 한글 조합 중인 글자도 보인다", async ({ page }) => {
+    await clickCell(page, "L2");
+
+    await page.keyboard.type("ab");
+    await expect(formulaBar(page)).toHaveValue("ab");
+
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.imeSetComposition", { text: "한", selectionStart: 1, selectionEnd: 1 });
+    await expect(formulaBar(page)).toHaveValue("ab한");
+    await cdp.send("Input.insertText", { text: "한" });
+    await cdp.detach();
+
+    await page.keyboard.press("Enter");
+    expect(await cell(page, "L2")).toBe("ab한");
+  });
+
+  test("수식 입력줄에서 Esc를 누르면 취소하고 원래 글자로 돌아간다", async ({ page }) => {
+    await clickCell(page, "G2");
+
+    await formulaBar(page).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("*2");
+    await expect(editor(page)).toHaveValue("=SUM(D2:F2)*2");
+    await page.keyboard.press("Escape");
+
+    expect(await cell(page, "G2")).toBe("=SUM(D2:F2)");
+    await expect(formulaBar(page)).toHaveValue("=SUM(D2:F2)");
+    expect((await state(page)).editing).toBeNull();
+  });
+
+  test("이름 상자에 주소를 치고 Enter를 누르면 그 셀·범위로 가고, 틀린 주소면 그대로 머문다", async ({ page }) => {
+    await nameBox(page).click();
+    await page.keyboard.type("c500");
+    await page.keyboard.press("Enter");
+
+    expect((await state(page)).active).toBe("C500");
+    expect((await state(page)).visible).toMatch(/500/);
+    await expect(nameBox(page)).toHaveValue("C500");
+
+    await nameBox(page).click();
+    await page.keyboard.type("B2:D4");
+    await page.keyboard.press("Enter");
+    expect((await state(page)).selection).toBe("B2:D4");
+
+    await nameBox(page).click();
+    await page.keyboard.type("없는주소");
+    await page.keyboard.press("Enter");
+    await expect(nameBox(page)).toHaveAttribute("aria-invalid", "true");
+    expect((await state(page)).selection).toBe("B2:D4");
+
+    await page.keyboard.press("Escape");
+    await expect(nameBox(page)).toHaveValue("B2");
+  });
+});

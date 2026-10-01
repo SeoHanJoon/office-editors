@@ -1,7 +1,8 @@
 import { cellKey, type CellRange } from "./address";
+import { formatCellValue } from "./cell-format";
 import type { FormulaEngine } from "./formula-engine";
 import { copyMapping, moveMapping, rewriteFormula } from "./formula-references";
-import { formatValue, isFormula } from "./formula-value";
+import { isFormula } from "./formula-value";
 import type { CellChange, Sheet } from "./sheet";
 
 /**
@@ -93,13 +94,14 @@ export function fitsSheet(sheet: Pick<Sheet, "rowCount" | "colCount">, range: Ce
   return range.top >= 0 && range.left >= 0 && range.bottom < sheet.rowCount && range.right < sheet.colCount;
 }
 
-/** 범위의 셀에 보이는 값을 클립보드 글자로. 수식 셀은 계산값, 계산 중인 셀은 빈 칸이다. */
+/** 범위의 셀에 보이는 값을 클립보드 글자로. 수식 셀은 계산값, 계산 중인 셀은 빈 칸이다. 숫자는 숫자 형식대로 쓴다. (Excel과 같음) */
 export function copyText(sheet: Sheet, engine: FormulaEngine, range: CellRange): string {
   const rows: string[][] = [];
   for (let row = range.top; row <= range.bottom; row++) {
     const cells: string[] = [];
     for (let col = range.left; col <= range.right; col++) {
-      cells.push(sheet.has({ row, col }) ? formatValue(engine.getValue({ row, col })) : "");
+      const address = { row, col };
+      cells.push(sheet.has(address) ? formatCellValue(engine.getValue(address), sheet.format(address)) : "");
     }
     rows.push(cells);
   }
