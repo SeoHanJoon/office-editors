@@ -13,7 +13,15 @@ import {
   pasteTextChanges,
 } from "./clipboard";
 import { editAction, type EditMode } from "./edit-keys";
-import { copyFillChanges, fillEntryChanges } from "./fill";
+import {
+  autoFillEnd,
+  clearChanges,
+  copyFillChanges,
+  fillChanges,
+  fillDrag,
+  fillEntryChanges,
+  type FillDrag,
+} from "./fill";
 import type { FormulaEngine } from "./formula-engine";
 import { findFormulaProblem } from "./formula-parser";
 import { formatValue } from "./formula-value";
@@ -25,6 +33,7 @@ import {
   contentSize,
   gridGeometry,
   isInHeader,
+  isOnFillHandle,
   pageRows,
   pointToCell,
   pointToHeader,
@@ -88,6 +97,15 @@ interface Resizing {
   size: number;
 }
 
+/** 채우기 핸들을 끄는 중인 상태 */
+interface Filling {
+  readonly pointer: number;
+  /** 핸들을 누를 때의 선택 범위 */
+  readonly source: CellRange;
+  /** 지금 놓으면 할 일. 원래 자리면 null */
+  drag: FillDrag | null;
+}
+
 /** Mac이면 단축키를 ⌘로 보여주고, Ctrl+클릭을 오른쪽 클릭으로 본다. */
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
@@ -115,6 +133,8 @@ function sameClipboardText(a: string, b: string): boolean {
  * 오른쪽 클릭, Shift+F10, 메뉴 키로 메뉴(@office/ui의 ContextMenu)를 연다. 메뉴의 복사·붙여넣기는 Clipboard API를 쓴다. (ADR 0029)
  *
  * 머리글 경계선을 끌면 줄 크기를, 두 번 누르면 내용에 맞춘 크기를 SetCustomSizesCommand로 바꾼다. 줄 크기는 Sheet에 있다. (ADR 0031)
+ *
+ * 선택 범위 오른쪽 아래의 채우기 핸들을 끌면 값을 이어 채우거나(범위 밖) 지우고(범위 안), 두 번 누르면 옆 열에 값이 있는 곳까지 아래로 채운다. (ADR 0033)
  */
 export class GridView {
   private readonly sheet: Sheet;
@@ -148,6 +168,8 @@ export class GridView {
   private dragPointer: number | null = null;
   /** 경계선을 끌어 크기를 바꾸는 중이면 그 상태 */
   private resizing: Resizing | null = null;
+  /** 채우기 핸들을 끄는 중이면 그 상태 */
+  private filling: Filling | null = null;
   /** 글자 너비를 재는 데 쓰는 캔버스 (열 너비 자동 맞춤) */
   private measureContext: CanvasRenderingContext2D | null = null;
   /** 드래그로 고르는 것: 셀 범위, 또는 머리글을 눌러 시작한 행·열 전체 */
@@ -436,11 +458,12 @@ export class GridView {
     this.requestRender();
   };
 
-  /** 경계선 위에서는 마우스 모양을 크기 조절 모양으로 바꾼다. */
+  /** 경계선 위에서는 마우스 모양을 크기 조절 모양으로, 채우기 핸들 위에서는 십자 모양으로 바꾼다. */
   private updateCursor(event: PointerEvent): void {
     const point = this.localPoint(event);
     const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
-    const cursor = handle ? (handle.axis === "col" ? "col-resize" : "row-resize") : "";
+    let cursor = handle ? (handle.axis === "col" ? "col-resize" : "row-resize") : "";
+    if (this.onFillHandle(point)) cursor = "crosshair";
     if (this.scroller.style.cursor !== cursor) this.scroller.style.cursor = cursor;
   }
 
@@ -514,6 +537,66 @@ export class GridView {
       (text) => ctx.measureText(text).width,
       CELL_PADDING,
     );
+  }
+
+  /**
+   * 채우기 핸들로 채울 범위. 행·열 전체를 골랐으면 핸들이 없어서 null이다.
+   * (Excel은 줄 전체를 골라도 옆으로 채울 수 있지만 여기서는 넣지 않았다)
+   */
+  private fillSource(): CellRange | null {
+    const range = selectionRange(this.currentSelection);
+    return wholeLines(range, this.sheet) ? null : range;
+  }
+
+  private onFillHandle(point: { x: number; y: number }): boolean {
+    const source = this.fillSource();
+    return source !== null && isOnFillHandle(this.geometry, this.viewport(), source, point.x, point.y);
+  }
+
+  /** 채우기 핸들을 누르면 끌기를 시작한다. 끄는 동안은 채울 범위만 점선으로 그린다. */
+  private startFill(event: PointerEvent, source: CellRange): void {
+    this.filling = { pointer: event.pointerId, source, drag: null };
+    this.scroller.setPointerCapture(event.pointerId);
+  }
+
+  private moveFill(event: PointerEvent): void {
+    const filling = this.filling!;
+    const point = this.localPoint(event);
+    const cell = pointToCell(this.geometry, this.viewport(), point.x, point.y);
+    this.reveal(cell);
+    filling.drag = fillDrag(filling.source, cell);
+    this.requestRender();
+  }
+
+  /** 손을 떼면 채우거나 지우고(undo 한 번), 채운 뒤의 범위를 고른다. 취소되면 그대로 둔다. */
+  private finishFill(apply: boolean): void {
+    const { source, drag } = this.filling!;
+    this.filling = null;
+    this.requestRender();
+    if (!apply || !drag) return;
+    if (drag.kind === "fill") {
+      this.apply(fillChanges(this.sheet, source, drag.direction, drag.count));
+      this.selectFilled(drag.range);
+    } else {
+      this.apply(clearChanges(this.sheet, drag.cleared));
+      this.selectFilled(drag.range);
+    }
+  }
+
+  /** 핸들을 두 번 누르면 옆 열에 값이 이어진 곳까지 아래로 채운다. 채울 곳이 없으면 아무것도 하지 않는다. */
+  private autoFillDown(source: CellRange): void {
+    const end = autoFillEnd(this.sheet, source);
+    if (end === null) return;
+    this.apply(fillChanges(this.sheet, source, "down", end - source.bottom));
+    this.selectFilled({ ...source, bottom: end });
+  }
+
+  /** 채운 뒤의 범위를 고른다. 활성 셀은 범위 안에 남아 있으면 그대로 둔다. (Excel과 같음) */
+  private selectFilled(range: CellRange): void {
+    const { active } = this.currentSelection;
+    const inside = active.row >= range.top && active.row <= range.bottom && active.col >= range.left && active.col <= range.right;
+    const selection = selectRange(range);
+    this.select(inside ? { ...selection, active } : selection, "none");
   }
 
   /** 줄 크기가 바뀌면(undo/redo 포함) 위치를 다시 계산하고 다시 그린다. 선택은 그대로 둔다. */
@@ -682,7 +765,10 @@ export class GridView {
         return;
       case "cancel":
         event.preventDefault();
-        if (this.editor.mode) this.editor.stop();
+        if (this.filling) {
+          this.scroller.releasePointerCapture(this.filling.pointer);
+          this.finishFill(false);
+        } else if (this.editor.mode) this.editor.stop();
         else this.clearCopied();
         this.requestRender();
         return;
@@ -739,6 +825,11 @@ export class GridView {
     this.focus();
     if (!committed) return;
 
+    const source = this.fillSource();
+    if (source && isOnFillHandle(this.geometry, this.viewport(), source, point.x, point.y)) {
+      this.startFill(event, source);
+      return;
+    }
     const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
     if (handle) {
       this.startResize(event, handle);
@@ -769,6 +860,10 @@ export class GridView {
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (this.resizing) {
       if (event.pointerId === this.resizing.pointer) this.moveResize(event);
+      return;
+    }
+    if (this.filling) {
+      if (event.pointerId === this.filling.pointer) this.moveFill(event);
       return;
     }
     if (this.dragPointer === null) {
@@ -802,14 +897,27 @@ export class GridView {
       this.scroller.releasePointerCapture(event.pointerId);
       return;
     }
+    if (this.filling?.pointer === event.pointerId) {
+      this.finishFill(event.type === "pointerup");
+      this.scroller.releasePointerCapture(event.pointerId);
+      return;
+    }
     if (event.pointerId !== this.dragPointer) return;
     this.dragPointer = null;
     this.scroller.releasePointerCapture(event.pointerId);
   };
 
-  /** 셀을 더블클릭하면 기존 값을 고치는 "edit" 입력을 시작한다. 머리글 경계선을 더블클릭하면 내용에 맞게 크기를 맞춘다. */
+  /**
+   * 셀을 더블클릭하면 기존 값을 고치는 "edit" 입력을 시작한다. 머리글 경계선을 더블클릭하면 내용에 맞게 크기를 맞춘다.
+   * 채우기 핸들을 더블클릭하면 옆 열에 값이 있는 곳까지 아래로 채운다.
+   */
   private readonly onDoubleClick = (event: MouseEvent): void => {
     const point = this.localPoint(event);
+    const source = this.fillSource();
+    if (source && isOnFillHandle(this.geometry, this.viewport(), source, point.x, point.y)) {
+      this.autoFillDown(source);
+      return;
+    }
     const handle = pointToResizeHandle(this.geometry, this.viewport(), point.x, point.y);
     if (handle) {
       this.autoFit(handle);
@@ -974,6 +1082,13 @@ export class GridView {
     });
   };
 
+  /** 채우기 핸들을 끄는 중이면 채울 범위(원래 범위 포함), 줄이는 중이면 지울 범위 */
+  private fillPreview(): CellRange | null {
+    const drag = this.filling?.drag;
+    if (!drag) return null;
+    return drag.kind === "fill" ? drag.range : drag.cleared;
+  }
+
   /** 끄는 중인 경계선의 새 자리 (캔버스 좌표) */
   private resizeGuide(): { axis: Axis; position: number } | null {
     if (!this.resizing) return null;
@@ -1006,6 +1121,8 @@ export class GridView {
       engine: this.engine,
       selection: this.currentSelection,
       copied: this.copied?.range ?? null,
+      fillHandle: this.fillSource() !== null,
+      fillPreview: this.fillPreview(),
       guide: this.resizeGuide(),
       geometry: this.geometry,
       viewport,

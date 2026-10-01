@@ -4,7 +4,9 @@ import { LineSizes } from "./line-sizes";
 import {
   cellRect,
   contentSize,
+  fillHandleRect,
   isInHeader,
+  isOnFillHandle,
   pageRows,
   pointToCell,
   pointToHeader,
@@ -192,3 +194,28 @@ function parseRange(text: string) {
   const [start, end] = text.split(":").map(at);
   return { top: start!.row, left: start!.col, bottom: end!.row, right: end!.col };
 }
+
+describe("채우기 핸들", () => {
+  // B2:C3의 오른쪽 아래 모서리는 (30 + 3×20, 10 + 3×10) = (90, 40)
+  const range = { top: 1, left: 1, bottom: 2, right: 2 };
+
+  test("범위 오른쪽 아래 모서리를 가운데로 그린다", () => {
+    expect(fillHandleRect(geometry, viewport(), range)).toEqual({ x: 86.5, y: 36.5, width: 7, height: 7 });
+  });
+
+  test("모서리에서 5px 안을 누르면 핸들이다", () => {
+    expect(isOnFillHandle(geometry, viewport(), range, 90, 40)).toBe(true);
+    expect(isOnFillHandle(geometry, viewport(), range, 95, 35)).toBe(true);
+    expect(isOnFillHandle(geometry, viewport(), range, 96, 40)).toBe(false);
+    expect(isOnFillHandle(geometry, viewport(), range, 90, 46)).toBe(false);
+  });
+
+  test("스크롤하면 핸들도 함께 움직인다", () => {
+    expect(isOnFillHandle(geometry, viewport(20, 10), range, 70, 30)).toBe(true);
+  });
+
+  test("머리글에 가려진 핸들은 잡지 않는다", () => {
+    // 2행까지 스크롤해 올리면 모서리 y = 10 + 30 - 30 = 10 (머리글 경계)
+    expect(isOnFillHandle(geometry, viewport(0, 30), range, 90, 8)).toBe(false);
+  });
+});

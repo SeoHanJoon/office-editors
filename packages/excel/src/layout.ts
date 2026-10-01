@@ -108,6 +108,26 @@ export function rangeRect(geometry: GridGeometry, viewport: Viewport, range: Cel
   };
 }
 
+/** 채우기 핸들(선택 범위 오른쪽 아래의 작은 네모)의 한 변 (px) */
+export const FILL_HANDLE_SIZE = 7;
+
+/** 채우기 핸들 가운데에서 가로·세로 이 거리(px) 안이면 핸들을 누른 것이다. 네모보다 조금 넓게 잡는다. */
+const FILL_HANDLE_HIT = 5;
+
+/** 채우기 핸들의 사각형. 범위 오른쪽 아래 모서리가 가운데다. */
+export function fillHandleRect(geometry: GridGeometry, viewport: Viewport, range: CellRange): Rect {
+  const area = rangeRect(geometry, viewport, range);
+  const half = FILL_HANDLE_SIZE / 2;
+  return { x: area.x + area.width - half, y: area.y + area.height - half, width: FILL_HANDLE_SIZE, height: FILL_HANDLE_SIZE };
+}
+
+/** 화면 좌표가 range의 채우기 핸들 위인지. 머리글에 가려진 핸들은 잡지 않는다. */
+export function isOnFillHandle(geometry: GridGeometry, viewport: Viewport, range: CellRange, x: number, y: number): boolean {
+  if (isInHeader(geometry, x, y)) return false;
+  const area = rangeRect(geometry, viewport, range);
+  return Math.abs(x - (area.x + area.width)) <= FILL_HANDLE_HIT && Math.abs(y - (area.y + area.height)) <= FILL_HANDLE_HIT;
+}
+
 /** 화면 좌표가 머리글 위인지 */
 export function isInHeader(geometry: GridGeometry, x: number, y: number): boolean {
   return x < geometry.headerWidth || y < geometry.headerHeight;

@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import { parseA1 } from "./address";
 import { gridGeometry, uniformGeometry, type GridLayout, type Viewport } from "./layout";
 import { FormulaEngine } from "./formula-engine";
-import { autoRowHeight, drawGrid } from "./render";
-import { selectCell } from "./selection";
+import { THEME, autoRowHeight, drawGrid } from "./render";
+import { selectCell, selectRange } from "./selection";
 import { Sheet } from "./sheet";
 
 interface DrawnText {
@@ -137,6 +137,63 @@ describe("셀 안 줄바꿈 그리기", () => {
     const texts = draw(new Sheet({ rowCount: 5, colCount: 3, data: [["가\n나", "=A1"]] }), [[0, 36]]);
 
     expect(texts.map((t) => t.text)).toEqual(["가", "나", "가\n나"]);
+  });
+});
+
+describe("채우기 핸들 그리기", () => {
+  interface DrawnRect {
+    kind: "fill" | "stroke";
+    style: string;
+    dashed: boolean;
+    rect: [number, number, number, number];
+  }
+
+  /** 사각형을 그린 기록만 남기는 가짜 Canvas */
+  function rectContext(): { ctx: CanvasRenderingContext2D; rects: DrawnRect[] } {
+    const rects: DrawnRect[] = [];
+    let dash: number[] = [];
+    const state: Record<string | symbol, unknown> = {};
+    const ctx = new Proxy(state, {
+      get(target, prop) {
+        if (prop === "setLineDash") return (value: number[]) => (dash = value);
+        if (prop === "fillRect" || prop === "strokeRect") {
+          const kind = prop === "fillRect" ? "fill" : "stroke";
+          return (...rect: [number, number, number, number]) =>
+            rects.push({ kind, style: String(target[kind === "fill" ? "fillStyle" : "strokeStyle"]), dashed: dash.length > 0, rect });
+        }
+        if (prop in target) return target[prop];
+        return () => {};
+      },
+      set(target, prop, value) {
+        target[prop] = value;
+        return true;
+      },
+    });
+    return { ctx: ctx as unknown as CanvasRenderingContext2D, rects };
+  }
+
+  const sheet = new Sheet({ rowCount: 10, colCount: 5 });
+  // B2:C3 → 셀 영역 x 50~90, y 20~40
+  const selection = selectRange({ top: 1, left: 1, bottom: 2, right: 2 });
+
+  function draw(options: { fillHandle?: boolean; fillPreview?: { top: number; left: number; bottom: number; right: number } }) {
+    const { ctx, rects } = rectContext();
+    drawGrid(ctx, { sheet, engine: new FormulaEngine(sheet), selection, geometry: uniformGeometry(layout, sheet), viewport: viewport(), ...options });
+    return rects;
+  }
+
+  test("선택 범위 오른쪽 아래 모서리에 흰 테두리를 두른 초록 네모를 그린다", () => {
+    const handle = draw({ fillHandle: true }).filter((r) => r.kind === "fill" && r.rect[0] > layout.headerWidth && r.rect[2] < 10);
+    expect(handle).toEqual([
+      { kind: "fill", style: THEME.background, dashed: false, rect: [86, 36, 9, 9] },
+      { kind: "fill", style: THEME.selectionBorder, dashed: false, rect: [87, 37, 7, 7] },
+    ]);
+  });
+
+  test("핸들을 끄지 않으면 미리보기 테두리가 없고, 끄는 중이면 채울 범위에 회색 점선을 그린다", () => {
+    expect(draw({ fillHandle: true }).filter((r) => r.dashed)).toEqual([]);
+    const preview = draw({ fillPreview: { top: 1, left: 1, bottom: 4, right: 2 } }).filter((r) => r.dashed);
+    expect(preview).toEqual([{ kind: "stroke", style: THEME.fillPreview, dashed: true, rect: [50, 20, 40, 40] }]);
   });
 });
 
