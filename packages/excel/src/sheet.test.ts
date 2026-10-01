@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MAX_COLS, MAX_ROWS } from "./address";
+import { MAX_COLS, MAX_ROWS, toA1 } from "./address";
 import { Sheet } from "./sheet";
 
 describe("Sheet", () => {
@@ -35,6 +35,14 @@ describe("Sheet", () => {
       ]),
     );
     expect([...sheet.entries()]).toHaveLength(2);
+  });
+
+  test("글자가 조건에 맞는 셀의 주소만 찾는다", () => {
+    const sheet = new Sheet({ rowCount: 3, colCount: 3, data: [["a", "b\nc"], ["", "", "d\ne"]] });
+
+    const found = sheet.findCells((input) => input.includes("\n")).map(toA1);
+
+    expect(found.sort()).toEqual(["B1", "C2"]);
   });
 
   test("빈 셀은 빈 문자열을 돌려주고 값이 없다고 알려준다", () => {

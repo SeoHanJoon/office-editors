@@ -54,3 +54,14 @@ export function fullSheet(): Sheet {
   }
   return new Sheet({ rowCount: PERF_ROWS, colCount: PERF_COLS, data });
 }
+
+/**
+ * 행마다 높이가 다른 성적표. scoreSheet에 I열 "메모"를 더하고, 행마다 1~4줄(줄바꿈)을 넣는다.
+ * 줄 크기 색인(ADR 0032)에서 기본 크기와 다른 줄이 가장 많은 경우다. (1줄인 행을 빼면 약 7만 5천 행)
+ */
+export function multilineSheet(n = PERF_ROWS): Sheet {
+  const sheet = scoreSheet(n);
+  const memos = ["확인", "확인\n재시험", "확인\n재시험\n상담", "확인\n재시험\n상담\n보충"];
+  sheet.setCells(Array.from({ length: n - 1 }, (_, i) => ({ address: { row: i + 1, col: 8 }, value: memos[i % 4]! })));
+  return sheet;
+}

@@ -115,7 +115,19 @@ export class Sheet {
 
   /** 값이 있는 셀을 모두 [주소, 입력한 글자]로 훑는다. 순서는 정해져 있지 않다. */
   *entries(): IterableIterator<[CellAddress, string]> {
-    for (const [key, value] of this.cells) yield [keyToAddress(key), value];
+    for (const [key, value] of this.cells) yield [addressOf(key), value];
+  }
+
+  /**
+   * 입력한 글자가 match를 만족하는 셀의 주소. 순서는 정해져 있지 않다.
+   * entries()와 달리 맞지 않는 셀에는 주소 객체를 만들지 않아서, 드물게 있는 셀을 시트 전체에서 찾을 때 빠르다.
+   */
+  findCells(match: (input: string) => boolean): CellAddress[] {
+    const found: CellAddress[] = [];
+    this.cells.forEach((value, key) => {
+      if (match(value)) found.push(addressOf(key));
+    });
+    return found;
   }
 
   /**
