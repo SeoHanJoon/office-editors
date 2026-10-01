@@ -10,6 +10,9 @@ export interface HistoryOptions {
 /** undo 한 번에 함께 되돌리는 편집 묶음. 실행한 순서대로 들어 있다. */
 type Entry = Command[];
 
+/** History의 기록이 바뀐 뒤 불린다. canUndo·canRedo를 다시 읽으면 된다. */
+export type HistoryListener = () => void;
+
 /** 편집(Command)을 실행하고 기록해서 undo/redo를 제공한다. */
 export class History {
   private readonly limit: number;
@@ -20,6 +23,7 @@ export class History {
   private pending: Entry | null = null;
   /** 다음 편집을 이어 붙일 수 있는 직전 편집. undo·redo·batch 뒤에는 null */
   private lastMerge: { key: string; time: number } | null = null;
+  private readonly listeners = new Set<HistoryListener>();
 
   constructor({ limit = 100, mergeWindowMs = 500 }: HistoryOptions = {}) {
     if (!Number.isInteger(limit) || limit < 1) {
@@ -63,6 +67,7 @@ export class History {
       this.record([command]);
     }
     this.lastMerge = key === undefined ? null : { key, time: now };
+    this.notify();
   }
 
   /**
@@ -80,6 +85,7 @@ export class History {
       if (!outer && pending.length > 0) {
         this.record(pending);
         this.lastMerge = null;
+        this.notify();
       }
       return result;
     } catch (error) {
@@ -99,6 +105,7 @@ export class History {
     this.undoStack.pop();
     this.redoStack.push(entry);
     this.lastMerge = null;
+    this.notify();
     return true;
   }
 
@@ -111,7 +118,21 @@ export class History {
     this.redoStack.pop();
     this.undoStack.push(entry);
     this.lastMerge = null;
+    this.notify();
     return true;
+  }
+
+  /**
+   * 기록이 바뀔 때마다(편집 실행, batch 끝, undo, redo) listener를 부른다. 툴바 버튼 상태를 맞출 때 쓴다.
+   * batch 안의 편집은 batch가 끝날 때 한 번만 알린다. 돌려준 함수를 부르면 그만 부른다.
+   */
+  onChange(listener: HistoryListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener();
   }
 
   private record(entry: Entry): void {
