@@ -30,3 +30,16 @@ Excel은 수식 입력줄에서 치면 셀 위에도 같은 글자가 보이고,
 - `excel` 패키지는 여전히 React를 모른다. 툴바를 바꿔도 표 코드는 그대로다.
 - `GridView`의 공개 메서드가 늘어난다. 입력 상태를 두 곳이 함께 쓰므로 입력 시작·확정 규칙은 `GridView` 한 곳에 둔다.
 - 툴바 버튼을 누르면 포커스가 버튼으로 가므로, 누른 뒤 표로 포커스를 돌려준다.
+- 구현하며 정한 것:
+  - React 부품은 `@office/ui/react` 입구로 따로 내보낸다. `@office/excel`은 `@office/ui`에서 오른쪽 클릭 메뉴만 가져오므로 React를 끌어오지 않는다. `@office/ui`는 React를 peerDependency로 둔다.
+  - 부품: `Toolbar`, `ToolbarButton`(`pressed`를 주면 `aria-pressed`), `ToolbarSelect`, `ToolbarMenu`, `ColorPicker`, `ToolbarSeparator`
+  - `GridView`에 더한 것: `activeFormat`, `applyFormat`, `toggleFormat`, `clearFormat`, `applyBorders`, `changeDecimals`, `goTo`, `editState`, `onEditChange`, `setEditText`, `commitEdit`, `cancelEdit`
+  - `History.onChange`: 편집 실행, batch 끝, undo, redo 때 알린다. batch 안의 편집은 batch가 끝날 때 한 번만 알린다.
+  - 버튼은 누를 때 포커스를 가져가지 않는다. (셀 입력창이 키보드를 계속 받는다) 고르기(글자 크기, 숫자 형식)·색 고르기는 고른 뒤 표로 포커스를 돌려준다.
+  - 서식 버튼은 입력 중이면 먼저 확정한다. 실행 취소·다시 실행 버튼은 입력 중에 막는다. (Excel과 같음)
+  - 켜진 정렬 버튼을 다시 누르면 일반 정렬(값 종류에 따름)로 돌린다. 세로 정렬은 아래가 기본이라 버튼이 눌린 모양으로 보인다.
+  - 단축키 Ctrl/Cmd+B·I·U는 입력 중이 아닐 때만 받는다. Ctrl+U는 브라우저의 소스 보기와 겹쳐서 막는다. 취소선 단축키(Ctrl+5)는 넣지 않았다.
+  - 수식 입력줄: 치기 시작하면 활성 셀의 "edit" 입력이 된다. Enter·Tab은 확정하고 옮기며, Shift를 누르면 반대로 간다. Alt+Enter는 줄바꿈, Esc는 취소다.
+  - 이름 상자: 틀린 주소면 빨간 테두리(`aria-invalid`)로 두고 글자를 골라 둔다. Esc를 누르면 지금 셀 주소로 돌아간다.
+  - 브라우저 테스트용 `window.__excel`에 `format(a1)`을 더했다. `value(a1)`은 숫자 형식을 적용한 글자다. (ADR 0010, 0020)
+- 자동 테스트로 확인하지 못한 것: 실제 입력기로 수식 입력줄에서 한글을 조합하는 것(CDP로 셀 쪽 조합만 확인했다), Ctrl+U 소스 보기가 실제로 막히는지(Playwright 키는 브라우저 단축키를 거치지 않는다)
