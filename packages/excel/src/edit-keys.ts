@@ -42,6 +42,12 @@ export type EditAction =
   | "openMenu"
   /** 입력 중에 커서 자리에 셀 안 줄바꿈을 넣는다. (Alt+Enter, Mac은 Option+Enter) */
   | "newline"
+  /** 고른 범위의 첫 행을 아래 칸에 복사한다. 한 행만 골랐으면 위 행을 복사해 온다. (Ctrl+D) */
+  | "fillDown"
+  /** 고른 범위의 첫 열을 오른쪽 칸에 복사한다. 한 열만 골랐으면 왼쪽 열을 복사해 온다. (Ctrl+R) */
+  | "fillRight"
+  /** 입력을 확정하며 고른 범위 전체에 넣는다. 선택은 그대로 둔다. (Ctrl+Enter) */
+  | "fillEntry"
   | "block";
 
 /**
@@ -58,6 +64,9 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
       if (isLetter(input, "z")) return input.shiftKey ? "redo" : "undo";
       if (isLetter(input, "y") && !input.shiftKey) return "redo";
       if (isLetter(input, "a") && !input.shiftKey) return "selectAll";
+      // 브라우저의 북마크(Ctrl/Cmd+D)·새로고침(Ctrl/Cmd+R) 단축키와 겹친다. 부르는 쪽이 기본 동작을 막는다.
+      if (isLetter(input, "d") && !input.shiftKey) return "fillDown";
+      if (isLetter(input, "r") && !input.shiftKey) return "fillRight";
       // 자판마다 Shift+=의 key가 다를 수 있어서 자판 위치(code)도 본다.
       if (input.key === "+" || (input.shiftKey && input.code === "Equal") || input.code === "NumpadAdd") return "insertLines";
       if (!input.shiftKey && (input.key === "-" || input.code === "Minus" || input.code === "NumpadSubtract")) return "deleteLines";
@@ -81,8 +90,9 @@ export function editAction(input: KeyInput, mode: EditMode | null): EditAction |
       return "cancel";
     case "Enter":
       if (plain) return "commit";
-      // Ctrl+Enter(범위 채우기)는 아직 없다. 입력창에 줄바꿈이 들어가지 않게 막는다.
-      return input.altKey && !mod ? "newline" : "block";
+      if (input.altKey) return mod ? "block" : "newline";
+      // Ctrl+Shift+Enter(Excel의 배열 수식)는 없다. 입력창에 줄바꿈이 들어가지 않게 막는다.
+      return input.shiftKey ? "block" : "fillEntry";
     case "Tab":
       return mod ? null : "commit";
     case "F2":

@@ -50,7 +50,7 @@ test("10만 행 성적표 한 화면 그리기 (1280×800)", async ({ bench }) =
   let scrollTop = 0;
   await bench("drawGrid 한 번", () => {
     scrollTop = (scrollTop + step) % maxTop;
-    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 }, fillHandle: true });
   }).run();
 });
 
@@ -68,6 +68,6 @@ test("행마다 높이가 다른 10만 행 한 화면 그리기 (1280×800)", as
   let scrollTop = 0;
   await bench("drawGrid 한 번 (여러 줄 셀 포함)", () => {
     scrollTop = (scrollTop + step) % maxTop;
-    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 } });
+    drawGrid(ctx, { sheet, engine, selection, geometry, viewport: { scrollLeft: 0, scrollTop, width: 1280, height: 800 }, fillHandle: true });
   }).run();
 });

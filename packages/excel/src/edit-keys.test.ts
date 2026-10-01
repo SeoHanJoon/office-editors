@@ -89,6 +89,21 @@ describe("입력 중이 아닐 때", () => {
     expect(action("Shift+F10", "edit")).toBeNull();
   });
 
+  test("Ctrl+D는 아래로, Ctrl+R은 오른쪽으로 채우기다 (Mac은 Cmd도)", () => {
+    expect(action("Control+d", null)).toBe("fillDown");
+    expect(action("Meta+d", null)).toBe("fillDown");
+    expect(action("Control+r", null)).toBe("fillRight");
+    expect(action("Meta+r", null)).toBe("fillRight");
+    // 한글 자판
+    expect(action("Control+ㅇ", null, "KeyD")).toBe("fillDown");
+    expect(action("Control+ㄱ", null, "KeyR")).toBe("fillRight");
+  });
+
+  test("입력 중 Ctrl+D·Ctrl+R은 채우지 않는다", () => {
+    expect(action("Control+d", "edit")).toBeNull();
+    expect(action("Control+r", "enter")).toBeNull();
+  });
+
   test("나머지 키는 이동 키인지 navigate에 묻는다", () => {
     for (const combo of ["ArrowDown", "Enter", "Tab", "a", "ㅎ", "Control+c", "Alt+z"]) {
       expect(action(combo, null)).toBe("navigate");
@@ -133,9 +148,15 @@ describe("입력 중일 때", () => {
     expect(action("Alt+Shift+Enter", "edit")).toBe("newline");
   });
 
-  test("Ctrl+Enter는 아직 없어서 줄바꿈만 막는다", () => {
-    expect(action("Control+Enter", "edit")).toBe("block");
+  test("Ctrl+Enter(Mac은 Cmd+Enter도)는 고른 범위 전체에 넣는다", () => {
+    expect(action("Control+Enter", "edit")).toBe("fillEntry");
+    expect(action("Control+Enter", "enter")).toBe("fillEntry");
+    expect(action("Meta+Enter", "enter")).toBe("fillEntry");
+  });
+
+  test("Ctrl+Alt+Enter와 Ctrl+Shift+Enter는 줄바꿈만 막는다", () => {
     expect(action("Control+Alt+Enter", "enter")).toBe("block");
+    expect(action("Shift+Control+Enter", "edit")).toBe("block");
   });
 
   test("Ctrl+Z, 글자, Delete, Backspace는 입력창에 맡긴다", () => {

@@ -1068,3 +1068,149 @@ test.describe("셀 안 줄바꿈", () => {
     expect(await rowHeight(page, 3)).toBe(linesHeight(3));
   });
 });
+
+test.describe("채우기", () => {
+  const cell = (page: Page, a1: string) => page.evaluate((a1) => window.__excel!.cell(a1), a1);
+  const cells = (page: Page, list: string[]) => Promise.all(list.map((a1) => cell(page, a1)));
+
+  async function typeIn(page: Page, a1: string, text: string) {
+    await clickCell(page, a1);
+    await page.keyboard.type(text);
+    await page.keyboard.press("Enter");
+  }
+
+  /** 스크롤하지 않은 표에서 셀("C5")의 오른쪽 아래 모서리 (그 셀로 끝나는 범위의 채우기 핸들) */
+  async function cellCorner(page: Page, a1: string) {
+    const center = await cellCenter(page, a1);
+    return { x: center.x + COL_WIDTH / 2, y: center.y + ROW_HEIGHT / 2 };
+  }
+
+  /** 채우기 핸들(range 끝 셀의 모서리)을 to 셀 가운데까지 끈다. */
+  async function dragFillHandle(page: Page, end: string, to: string) {
+    const from = await cellCorner(page, end);
+    const target = await cellCenter(page, to);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 8 });
+    await page.mouse.up();
+  }
+
+  test("숫자 두 칸을 골라 핸들을 아래로 끌면 같은 간격으로 이어 채우고, undo 한 번에 되돌린다", async ({ page }) => {
+    await typeIn(page, "L2", "1");
+    await typeIn(page, "L3", "3");
+    await clickCell(page, "L2");
+    await clickCell(page, "L3", { shift: true });
+
+    await dragFillHandle(page, "L3", "L6");
+
+    expect(await cells(page, ["L4", "L5", "L6"])).toEqual(["5", "7", "9"]);
+    expect((await state(page)).selection).toBe("L2:L6");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L4", "L5", "L6"])).toEqual(["", "", ""]);
+  });
+
+  test("핸들을 오른쪽으로 끌면 글자 끝 숫자와 요일이 이어진다", async ({ page }) => {
+    await typeIn(page, "L2", "항목1");
+    await typeIn(page, "L3", "금");
+    await clickCell(page, "L2");
+    await clickCell(page, "L3", { shift: true });
+
+    await dragFillHandle(page, "L3", "O3");
+
+    expect(await cells(page, ["M2", "N2", "O2"])).toEqual(["항목2", "항목3", "항목4"]);
+    expect(await cells(page, ["M3", "N3", "O3"])).toEqual(["토", "일", "월"]);
+    expect((await state(page)).selection).toBe("L2:O3");
+  });
+
+  test("수식을 핸들로 채우면 `$`가 없는 참조만 따라간다", async ({ page }) => {
+    await typeIn(page, "L2", "=D2+$D$2");
+    await clickCell(page, "L2");
+
+    await dragFillHandle(page, "L2", "L4");
+
+    expect(await cells(page, ["L3", "L4"])).toEqual(["=D3+$D$2", "=D4+$D$2"]);
+  });
+
+  test("핸들을 범위 안쪽으로 끌면 줄인 칸을 지운다", async ({ page }) => {
+    for (const a1 of ["L2", "L3", "L4"]) await typeIn(page, a1, "값");
+    await clickCell(page, "L2");
+    await clickCell(page, "L4", { shift: true });
+
+    await dragFillHandle(page, "L4", "L2");
+
+    expect(await cells(page, ["L2", "L3", "L4"])).toEqual(["값", "", ""]);
+    expect((await state(page)).selection).toBe("L2");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L2", "L3", "L4"])).toEqual(["값", "값", "값"]);
+  });
+
+  test("끄는 중에 Esc를 누르면 아무것도 채우지 않는다", async ({ page }) => {
+    await typeIn(page, "L2", "1");
+    await clickCell(page, "L2");
+    const from = await cellCorner(page, "L2");
+    const target = await cellCenter(page, "L5");
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 8 });
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+
+    expect(await cells(page, ["L3", "L4", "L5"])).toEqual(["", "", ""]);
+  });
+
+  test("핸들을 두 번 누르면 옆 열에 값이 있는 곳까지 아래로 채운다", async ({ page }) => {
+    for (const a1 of ["L2", "L3", "L4", "L5"]) await typeIn(page, a1, "x");
+    await typeIn(page, "M2", "=D2+1");
+    await clickCell(page, "M2");
+
+    const corner = await cellCorner(page, "M2");
+    await page.mouse.dblclick(corner.x, corner.y);
+
+    expect(await cells(page, ["M3", "M4", "M5", "M6"])).toEqual(["=D3+1", "=D4+1", "=D5+1", ""]);
+    expect((await state(page)).selection).toBe("M2:M5");
+    expect((await state(page)).editing).toBeNull();
+  });
+
+  test("Ctrl+D는 첫 행을 아래 칸에 복사하고(수식은 참조가 따라감), undo 한 번에 되돌린다", async ({ page }) => {
+    await typeIn(page, "L2", "항목1");
+    await typeIn(page, "M2", "=D2*2");
+    await clickCell(page, "L2");
+    await clickCell(page, "M4", { shift: true });
+
+    await page.keyboard.press("ControlOrMeta+d");
+
+    expect(await cells(page, ["L3", "L4", "M3", "M4"])).toEqual(["항목1", "항목1", "=D3*2", "=D4*2"]);
+    expect((await state(page)).selection).toBe("L2:M4");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L3", "L4", "M3", "M4"])).toEqual(["", "", "", ""]);
+  });
+
+  test("Ctrl+R은 한 열만 골랐으면 왼쪽 열을 복사해 온다", async ({ page }) => {
+    await typeIn(page, "L2", "왼쪽");
+    await clickCell(page, "M2");
+
+    await page.keyboard.press("ControlOrMeta+r");
+
+    expect(await cell(page, "M2")).toBe("왼쪽");
+    // 브라우저 새로고침을 막았으므로 표가 그대로다.
+    expect((await state(page)).active).toBe("M2");
+  });
+
+  test("범위를 고른 채 입력하고 Ctrl+Enter를 누르면 범위 전체에 넣고 선택은 그대로다", async ({ page }) => {
+    await clickCell(page, "L2");
+    await clickCell(page, "M3", { shift: true });
+    await page.keyboard.type("=D2+1");
+
+    await page.keyboard.press("ControlOrMeta+Enter");
+
+    expect(await cells(page, ["L2", "M2", "L3", "M3"])).toEqual(["=D2+1", "=E2+1", "=D3+1", "=E3+1"]);
+    const { selection, active, editing } = await state(page);
+    expect({ selection, active, editing }).toEqual({ selection: "L2:M3", active: "L2", editing: null });
+
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await cells(page, ["L2", "M2", "L3", "M3"])).toEqual(["", "", "", ""]);
+  });
+});

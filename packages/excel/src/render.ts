@@ -1,7 +1,7 @@
 import { columnName, type CellRange } from "./address";
 import type { FormulaEngine } from "./formula-engine";
 import { FormulaError, formatValue, type CellValue } from "./formula-value";
-import { cellRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
+import { cellRect, fillHandleRect, rangeRect, visibleRange, type GridGeometry, type Rect, type Viewport } from "./layout";
 import { textLines } from "./resize";
 import { selectionRange, type Selection } from "./selection";
 import type { Axis, Sheet } from "./sheet";
@@ -13,6 +13,10 @@ export interface RenderState {
   readonly selection: Selection;
   /** 복사하거나 잘라낸 범위. 점선 테두리를 그린다. 없으면 null */
   readonly copied?: CellRange | null;
+  /** 선택 범위 오른쪽 아래에 채우기 핸들을 그릴지 */
+  readonly fillHandle?: boolean;
+  /** 채우기 핸들을 끄는 중이면 채울 범위(줄일 때는 지울 범위). 회색 점선 테두리를 그린다. 없으면 null */
+  readonly fillPreview?: CellRange | null;
   /** 경계선을 끄는 중이면 새 경계선 자리. position은 캔버스 좌표(열은 x, 행은 y)다. 없으면 null */
   readonly guide?: { readonly axis: Axis; readonly position: number } | null;
   /** 머리글과 줄마다의 크기. 행·열 수가 sheet와 같아야 한다. */
@@ -57,6 +61,8 @@ export const THEME = {
   problemBorder: "#e0b4b4",
   /** 경계선을 끄는 중에 보이는 새 경계선 */
   resizeGuide: "#444444",
+  /** 채우기 핸들을 끄는 중에 보이는 채울 범위 테두리 */
+  fillPreview: "#8a8a8a",
 };
 
 /**
@@ -194,11 +200,31 @@ function drawPending(ctx: CanvasRenderingContext2D, rect: Rect): void {
   ctx.fillStyle = THEME.text;
 }
 
-function drawSelectionBorder(ctx: CanvasRenderingContext2D, { geometry, viewport, selection, copied }: RenderState): void {
-  const area = rangeRect(geometry, viewport, selectionRange(selection));
+function drawSelectionBorder(ctx: CanvasRenderingContext2D, state: RenderState): void {
+  const { geometry, viewport, selection, copied, fillHandle, fillPreview } = state;
+  const range = selectionRange(selection);
+  const area = rangeRect(geometry, viewport, range);
   ctx.lineWidth = 2;
   ctx.strokeStyle = THEME.selectionBorder;
   ctx.strokeRect(Math.round(area.x), Math.round(area.y), area.width, area.height);
+  if (fillHandle) {
+    // 흰 테두리를 두른 초록 네모 (Excel과 같음)
+    const handle = fillHandleRect(geometry, viewport, range);
+    const x = Math.round(handle.x);
+    const y = Math.round(handle.y);
+    ctx.fillStyle = THEME.background;
+    ctx.fillRect(x - 1, y - 1, handle.width + 2, handle.height + 2);
+    ctx.fillStyle = THEME.selectionBorder;
+    ctx.fillRect(x, y, handle.width, handle.height);
+  }
+  if (fillPreview) {
+    const preview = rangeRect(geometry, viewport, fillPreview);
+    ctx.strokeStyle = THEME.fillPreview;
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(Math.round(preview.x), Math.round(preview.y), preview.width, preview.height);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = THEME.selectionBorder;
+  }
   if (!copied) return;
   // 복사한 범위: Excel처럼 점선 (움직이지는 않는다)
   const copy = rangeRect(geometry, viewport, copied);
