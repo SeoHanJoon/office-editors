@@ -338,7 +338,7 @@ function decorate(
   const thickness = Math.max(1, Math.round(size / 14));
   ctx.beginPath();
   if (format.underline) ctx.rect(start, Math.round(lineY + size * 0.42), width, thickness);
-  if (format.strike) ctx.rect(start, Math.round(lineY + size * 0.05), width, thickness);
+  if (format.strike) ctx.rect(start, Math.round(lineY - thickness / 2), width, thickness);
   ctx.fill();
 }
 
