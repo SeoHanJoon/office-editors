@@ -12,7 +12,7 @@ export default function Home() {
     <main>
       <h1>Office Editors</h1>
       <nav aria-label="에디터">
-        <Link href="/excel">Excel</Link>
+        <Link href="/excel">Excel</Link> <Link href="/docs">Docs</Link>
       </nav>
       <ul aria-label="연결된 패키지">
         {packages.map((name) => (
